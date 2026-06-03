@@ -25,6 +25,8 @@ class Settings(BaseSettings):
         "http://127.0.0.1:3000",
         "http://frontend:3000",
         "https://app.thetransformix.com",
+        "https://sx.thetransformix.com",
+        "http://sx.thetransformix.com",
     ]
 
     # AI / Azure OpenAI
