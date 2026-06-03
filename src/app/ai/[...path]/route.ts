@@ -1,6 +1,6 @@
 import http from "http";
 
-const FLASK_HOST = "localhost";
+const FLASK_HOST = process.env.AI_API_HOST || "ai-api";
 const FLASK_PORT = parseInt(process.env.AI_API_PORT || "5000", 10);
 
 // 10-minute timeout for long-running AI analysis requests

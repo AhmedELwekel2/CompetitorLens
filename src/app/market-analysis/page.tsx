@@ -154,9 +154,11 @@ export default function MarketAnalysisPage() {
             <Loader2 size={40} className="text-primary animate-spin mb-4" />
             <h2 className="text-lg font-bold text-text-heading mb-2">Analyzing {industry}...</h2>
             <p className="text-sm text-text-secondary max-w-md">
-              {data?.analysisTitle
-                ? `Processing: ${data.analysisTitle}`
-                : "Scanning competitive landscapes, pricing models, and sentiment trends..."}
+              {market.progressMessage
+                ? market.progressMessage
+                : data?.analysisTitle
+                  ? `Processing: ${data.analysisTitle}`
+                  : "Scanning competitive landscapes, pricing models, and sentiment trends..."}
             </p>
           </div>
         </Card>

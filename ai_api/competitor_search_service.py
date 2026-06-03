@@ -332,20 +332,34 @@ class CompetitorSearchService:
         return result
 
     def _sync_search_pipeline(
-        self, industry, region, max_competitors, max_reviews_per_competitor
+        self, industry, region, max_competitors, max_reviews_per_competitor,
+        progress_callback=None,
     ) -> Dict[str, Any]:
         driver = None
         try:
             driver = self._setup_browser()
 
             # Step 1: Search Google Maps
+            if progress_callback:
+                progress_callback("searching_google_maps", "Searching Google Maps for competitors...")
             competitors = self._search_google_maps(driver, industry, region, max_competitors)
 
             if not competitors:
+                if progress_callback:
+                    progress_callback("no_competitors", "No competitors found on Google Maps")
                 return {"competitors": [], "output_file": None}
 
+            if progress_callback:
+                progress_callback("found_competitors", f"Found {len(competitors)} competitors", {"count": len(competitors)})
+
             # Step 2: Scrape Google Maps reviews for each competitor
-            for comp in competitors:
+            for i, comp in enumerate(competitors):
+                if progress_callback:
+                    progress_callback(
+                        "scraping_google_maps",
+                        f"Scraping Google Maps reviews for {comp['name']} ({i+1}/{len(competitors)})",
+                        {"current": i+1, "total": len(competitors), "name": comp["name"]},
+                    )
                 try:
                     gm_reviews = self._scrape_competitor_reviews(
                         driver, comp, max_reviews_per_competitor
@@ -359,12 +373,24 @@ class CompetitorSearchService:
                     comp["google_maps_reviews"] = []
 
             # Step 3: Try Trustpilot enrichment for each competitor
-            for comp in competitors:
+            for i, comp in enumerate(competitors):
+                if progress_callback:
+                    progress_callback(
+                        "searching_trustpilot",
+                        f"Searching Trustpilot for {comp['name']} ({i+1}/{len(competitors)})",
+                        {"current": i+1, "total": len(competitors), "name": comp["name"]},
+                    )
                 try:
                     tp_url = self.trustpilot_scraper.search_business_url(comp["name"])
                     comp["trustpilot_url"] = tp_url
 
                     if tp_url:
+                        if progress_callback:
+                            progress_callback(
+                                "scraping_trustpilot",
+                                f"Scraping Trustpilot reviews for {comp['name']} ({i+1}/{len(competitors)})",
+                                {"current": i+1, "total": len(competitors), "name": comp["name"]},
+                            )
                         tp_result = self.trustpilot_scraper.scrape_trustpilot_reviews(
                             tp_url, max_reviews=max_reviews_per_competitor
                         )
@@ -382,6 +408,9 @@ class CompetitorSearchService:
                     comp["trustpilot_url"] = None
                     comp["trustpilot_business_info"] = None
                     comp["trustpilot_reviews"] = []
+
+            if progress_callback:
+                progress_callback("scraping_complete", f"Data collection complete for {len(competitors)} competitors", {"count": len(competitors)})
 
             return {"competitors": competitors, "output_file": None}
 

@@ -1,6 +1,9 @@
 import asyncio
 import json
 import logging
+import threading
+import queue
+import time
 from typing import Any, Dict
 from flask import Flask, request, jsonify, Response, stream_with_context
 from flask_cors import CORS
@@ -27,6 +30,26 @@ def is_valid_url(url):
     return url.startswith("http://") or url.startswith("https://")
 
 
+# ── SSE keepalive newline generator ──────────────────────────────────────────
+
+def _sse_progress_message(stage, message, data=None):
+    """Build a progress SSE payload."""
+    payload = {
+        "_progress": True,
+        "stage": stage,
+        "message": message,
+        "timestamp": time.time(),
+    }
+    if data:
+        payload["data"] = data
+    return "data: " + json.dumps(payload) + "\n\n"
+
+
+def _sse_keepalive():
+    """Return an SSE keepalive comment (invisible to EventSource ondata handlers)."""
+    return ": keepalive\n\n"
+
+
 # ── POST /ai/customer-sentiment-analysis ──────────────────────────────────────
 
 @app.post("/ai/customer-sentiment-analysis")
@@ -40,154 +63,222 @@ def customer_sentiment_analysis():
         if not industry or not country:
             return jsonify({"error": "industry_field and country are required"}), 400
 
-        MAX_COMPETITORS = 3
-        REVIEWS_PER_COMPETITOR = 10
+        MAX_COMPETITORS = 5
+        REVIEWS_PER_COMPETITOR = 100
 
         def stream_response():
-            css = CompetitorSearchService()
-            analyzer = SentimentAnalyzer()
-            total_tokens = 0
-            total_input_tokens = 0
-            total_output_tokens = 0
-            total_cost = 0.0
+            progress_q = queue.Queue()
+            result_holder = [None]  # mutable container for the analysis result
+            error_holder = [None]   # mutable container for errors
 
-            async def run_competitor_analysis() -> Dict[str, Any]:
-                # Step 1: Use the integrated pipeline (Google Maps + Trustpilot)
-                result = await css.search_competitors_with_trustpilot(
-                    industry=industry,
-                    region=country,
-                    max_competitors=MAX_COMPETITORS,
-                    max_reviews_per_competitor=REVIEWS_PER_COMPETITOR,
-                )
+            # ---------------------------------------------------------------
+            # Background worker: runs the heavy computation and posts progress
+            # ---------------------------------------------------------------
+            def background_worker():
+                css = CompetitorSearchService()
+                analyzer = SentimentAnalyzer()
 
-                competitors = result.get("competitors", [])
+                def on_progress(stage, message, data=None):
+                    progress_q.put(("progress", stage, message, data))
 
-                if not competitors:
-                    return {
-                        "competitor_results": [],
-                        "combined_analysis": {},
-                        "output_file": result.get("output_file"),
-                    }
+                try:
+                    # Step 1: Search + scrape (runs synchronously inside thread)
+                    loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(loop)
+                    try:
+                        # We need to run the async method but pass progress_callback
+                        # The async wrapper just delegates to _sync_search_pipeline
+                        # So we call the sync pipeline directly with the callback
+                        search_result = css._sync_search_pipeline(
+                            industry, country, MAX_COMPETITORS, REVIEWS_PER_COMPETITOR,
+                            progress_callback=on_progress,
+                        )
+                    finally:
+                        loop.close()
 
-                # Step 2: Run sentiment analysis on collected reviews (GM + Trustpilot)
-                competitor_results = []
-                all_sentiments = []
+                    competitors = search_result.get("competitors", [])
 
-                for comp in competitors:
-                    gm_reviews = comp.get("google_maps_reviews", [])
-                    tp_reviews = comp.get("trustpilot_reviews", [])
+                    if not competitors:
+                        result_holder[0] = {
+                            "competitor_results": [],
+                            "combined_analysis": {},
+                            "output_file": search_result.get("output_file"),
+                        }
+                        return
 
-                    # Collect all review texts from both sources
-                    all_review_texts = []
-                    for r in gm_reviews:
-                        text = r.get("review_text", "")
-                        if text and text.strip():
-                            all_review_texts.append(text)
-                    for r in tp_reviews:
-                        text = r.get("review_text", "")
-                        if text and text.strip():
-                            all_review_texts.append(text)
+                    # Step 2: Run sentiment analysis on collected reviews
+                    competitor_results = []
+                    all_sentiments = []
 
-                    if not all_review_texts:
+                    for idx, comp in enumerate(competitors):
+                        on_progress(
+                            "analyzing_sentiment",
+                            f"Analyzing sentiment for {comp['name']} ({idx+1}/{len(competitors)})",
+                            {"current": idx+1, "total": len(competitors), "name": comp["name"]},
+                        )
+
+                        gm_reviews = comp.get("google_maps_reviews", [])
+                        tp_reviews = comp.get("trustpilot_reviews", [])
+
+                        # Collect all review texts from both sources
+                        all_review_texts = []
+                        for r in gm_reviews:
+                            text = r.get("review_text", "")
+                            if text and text.strip():
+                                all_review_texts.append(text)
+                        for r in tp_reviews:
+                            text = r.get("review_text", "")
+                            if text and text.strip():
+                                all_review_texts.append(text)
+
+                        if not all_review_texts:
+                            competitor_results.append({
+                                "competitor_info": comp,
+                                "sentiment_summary": {
+                                    "total_reviews": 0,
+                                    "sentiment_percentages": {"Positive": 0, "Negative": 0, "Neutral": 0},
+                                    "average_polarity": 0,
+                                },
+                                "total_reviews_analyzed": 0,
+                                "ai_insights": {"insights": {"summary": "", "full_analysis": ""}},
+                            })
+                            continue
+
+                        # Run sentiment analysis on all review texts
+                        sentiment_results = analyzer.analyze_sentiment_batch(all_review_texts)
+
+                        total = len(sentiment_results)
+                        positive = sum(1 for r in sentiment_results if r["sentiment"] == "Positive")
+                        negative = sum(1 for r in sentiment_results if r["sentiment"] == "Negative")
+                        neutral = sum(1 for r in sentiment_results if r["sentiment"] == "Neutral")
+
+                        sentiment_percentages = {
+                            "Positive": (positive / total) * 100 if total else 0,
+                            "Negative": (negative / total) * 100 if total else 0,
+                            "Neutral": (neutral / total) * 100 if total else 0,
+                        }
+                        avg_polarity = sum(r["polarity"] for r in sentiment_results) / total if total else 0
+
+                        summary = {
+                            "total_reviews": total,
+                            "sentiment_counts": {"Positive": positive, "Negative": negative, "Neutral": neutral},
+                            "sentiment_percentages": sentiment_percentages,
+                            "average_polarity": avg_polarity,
+                        }
+
+                        all_sentiments.extend(sentiment_results)
+
+                        # Generate AI insights per competitor
+                        on_progress(
+                            "generating_ai_insights",
+                            f"Generating AI insights for {comp['name']} ({idx+1}/{len(competitors)})",
+                            {"current": idx+1, "total": len(competitors), "name": comp["name"]},
+                        )
+                        try:
+                            competitor_ai_input = {
+                                "summary": {
+                                    "total_reviews": total,
+                                    "sentiment_percentages": sentiment_percentages,
+                                    "average_polarity": avg_polarity,
+                                },
+                                "sample_reviews": [
+                                    {"Review Text": t, "Sentiment": s["sentiment"], "Star Rating": 0}
+                                    for t, s in zip(all_review_texts[:15], sentiment_results[:15])
+                                ],
+                                "competitor": {
+                                    "name": comp.get("name", "Unknown"),
+                                    "rating": comp.get("rating", 0),
+                                    "review_count": comp.get("review_count", 0),
+                                },
+                            }
+                            # Need event loop for async GPT call
+                            loop = asyncio.new_event_loop()
+                            asyncio.set_event_loop(loop)
+                            try:
+                                ai_insights = loop.run_until_complete(
+                                    analyzer.gpt_service.generate_sentiment_insights(competitor_ai_input)
+                                )
+                            finally:
+                                loop.close()
+                        except Exception as ai_err:
+                            logging.warning(f"AI insights failed for {comp['name']}: {ai_err}")
+                            ai_insights = {"insights": {"summary": "AI insights unavailable.", "full_analysis": ""}}
+
                         competitor_results.append({
                             "competitor_info": comp,
-                            "sentiment_summary": {
-                                "total_reviews": 0,
-                                "sentiment_percentages": {"Positive": 0, "Negative": 0, "Neutral": 0},
-                                "average_polarity": 0,
-                            },
-                            "total_reviews_analyzed": 0,
-                            "ai_insights": {"insights": {"summary": "", "full_analysis": ""}},
+                            "sentiment_summary": summary,
+                            "total_reviews_analyzed": total,
+                            "ai_insights": ai_insights,
                         })
-                        continue
 
-                    # Run sentiment analysis on all review texts
-                    sentiment_results = analyzer.analyze_sentiment_batch(all_review_texts)
-
-                    total = len(sentiment_results)
-                    positive = sum(1 for r in sentiment_results if r["sentiment"] == "Positive")
-                    negative = sum(1 for r in sentiment_results if r["sentiment"] == "Negative")
-                    neutral = sum(1 for r in sentiment_results if r["sentiment"] == "Neutral")
-
-                    sentiment_percentages = {
-                        "Positive": (positive / total) * 100 if total else 0,
-                        "Negative": (negative / total) * 100 if total else 0,
-                        "Neutral": (neutral / total) * 100 if total else 0,
-                    }
-                    avg_polarity = sum(r["polarity"] for r in sentiment_results) / total if total else 0
-
-                    summary = {
-                        "total_reviews": total,
-                        "sentiment_counts": {"Positive": positive, "Negative": negative, "Neutral": neutral},
-                        "sentiment_percentages": sentiment_percentages,
-                        "average_polarity": avg_polarity,
-                    }
-
-                    all_sentiments.extend(sentiment_results)
-
-                    # Generate AI insights per competitor
-                    try:
-                        competitor_ai_input = {
-                            "summary": {
-                                "total_reviews": total,
-                                "sentiment_percentages": sentiment_percentages,
-                                "average_polarity": avg_polarity,
+                    # Combined analysis across all competitors
+                    total_all = len(all_sentiments)
+                    if total_all > 0:
+                        pos_all = sum(1 for r in all_sentiments if r["sentiment"] == "Positive")
+                        neg_all = sum(1 for r in all_sentiments if r["sentiment"] == "Negative")
+                        neu_all = sum(1 for r in all_sentiments if r["sentiment"] == "Neutral")
+                        combined_summary = {
+                            "total_reviews": total_all,
+                            "sentiment_percentages": {
+                                "Positive": (pos_all / total_all) * 100,
+                                "Negative": (neg_all / total_all) * 100,
+                                "Neutral": (neu_all / total_all) * 100,
                             },
-                            "sample_reviews": [
-                                {"Review Text": t, "Sentiment": s["sentiment"], "Star Rating": 0}
-                                for t, s in zip(all_review_texts[:15], sentiment_results[:15])
-                            ],
-                            "competitor": {
-                                "name": comp.get("name", "Unknown"),
-                                "rating": comp.get("rating", 0),
-                                "review_count": comp.get("review_count", 0),
-                            },
+                            "average_polarity": sum(r["polarity"] for r in all_sentiments) / total_all,
                         }
-                        ai_insights = await analyzer.gpt_service.generate_sentiment_insights(competitor_ai_input)
-                    except Exception:
-                        ai_insights = {"insights": {"summary": "AI insights unavailable.", "full_analysis": ""}}
+                    else:
+                        combined_summary = {}
 
-                    competitor_results.append({
-                        "competitor_info": comp,
-                        "sentiment_summary": summary,
-                        "total_reviews_analyzed": total,
-                        "ai_insights": ai_insights,
-                    })
-
-                # Combined analysis across all competitors
-                total_all = len(all_sentiments)
-                if total_all > 0:
-                    pos_all = sum(1 for r in all_sentiments if r["sentiment"] == "Positive")
-                    neg_all = sum(1 for r in all_sentiments if r["sentiment"] == "Negative")
-                    neu_all = sum(1 for r in all_sentiments if r["sentiment"] == "Neutral")
-                    combined_summary = {
-                        "total_reviews": total_all,
-                        "sentiment_percentages": {
-                            "Positive": (pos_all / total_all) * 100,
-                            "Negative": (neg_all / total_all) * 100,
-                            "Neutral": (neu_all / total_all) * 100,
+                    result_holder[0] = {
+                        "competitor_results": competitor_results,
+                        "combined_analysis": {
+                            "combined_summary": combined_summary,
+                            "total_competitors_analyzed": len(competitor_results),
+                            "total_reviews_analyzed": total_all,
                         },
-                        "average_polarity": sum(r["polarity"] for r in all_sentiments) / total_all,
+                        "output_file": search_result.get("output_file"),
                     }
-                else:
-                    combined_summary = {}
 
-                return {
-                    "competitor_results": competitor_results,
-                    "combined_analysis": {
-                        "combined_summary": combined_summary,
-                        "total_competitors_analyzed": len(competitor_results),
-                        "total_reviews_analyzed": total_all,
-                    },
-                    "output_file": result.get("output_file"),
-                }
+                except Exception as e:
+                    import traceback
+                    logging.error(f"Background worker error: {e}\n{traceback.format_exc()}")
+                    error_holder[0] = str(e)
+                finally:
+                    progress_q.put(("done", None, None, None))
 
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            try:
-                analysis_results = loop.run_until_complete(run_competitor_analysis())
-            finally:
-                loop.close()
+            # Start the background worker thread
+            worker = threading.Thread(target=background_worker, daemon=True)
+            worker.start()
+
+            # ---------------------------------------------------------------
+            # Main generator: yields progress keepalives + final SSE events
+            # ---------------------------------------------------------------
+            KEEPALIVE_INTERVAL = 5  # send keepalive every 5 seconds during waits
+
+            while True:
+                try:
+                    msg_type, stage, message, data = progress_q.get(timeout=KEEPALIVE_INTERVAL)
+                except queue.Empty:
+                    # No progress update in a while — send a keepalive to prevent timeout
+                    yield _sse_keepalive()
+                    continue
+
+                if msg_type == "progress":
+                    # Yield a progress SSE event (frontend can display it)
+                    yield _sse_progress_message(stage, message, data)
+                elif msg_type == "done":
+                    break
+
+            # Check for errors from the background worker
+            if error_holder[0]:
+                yield "data: " + json.dumps({"error": f"Analysis failed: {error_holder[0]}"}) + "\n\n"
+                return
+
+            # Unpack the completed analysis results
+            analysis_results = result_holder[0]
+            if analysis_results is None:
+                yield "data: " + json.dumps({"error": "No results returned from analysis"}) + "\n\n"
+                return
 
             competitor_results = analysis_results.get("competitor_results", [])
             combined = analysis_results.get("combined_analysis", {})
@@ -195,6 +286,11 @@ def customer_sentiment_analysis():
             output_file = analysis_results.get("output_file")
 
             # Extract token usage from all competitor results
+            total_tokens = 0
+            total_input_tokens = 0
+            total_output_tokens = 0
+            total_cost = 0.0
+
             for result in competitor_results:
                 ai_insights = result.get("ai_insights", {}) or {}
                 if isinstance(ai_insights, dict):
@@ -408,26 +504,67 @@ def business_sentiment_analysis():
             return jsonify({"error": "Invalid Google Maps URL. Please provide a valid Google Maps business URL.", "url": google_maps_url}), 400
 
         def stream_response():
-            analyzer = SentimentAnalyzer()
-            total_tokens = 0
-            total_input_tokens = 0
-            total_output_tokens = 0
-            total_cost = 0.0
+            progress_q = queue.Queue()
+            result_holder = [None]
+            error_holder = [None]
 
-            async def run_business_analysis() -> Dict[str, Any]:
-                return await analyzer.analyze_business_sentiment(
-                    google_maps_url=google_maps_url,
-                    max_reviews=max_reviews
-                )
+            def background_worker():
+                analyzer = SentimentAnalyzer()
+                try:
+                    on_progress = lambda stage, msg, data=None: progress_q.put(("progress", stage, msg, data))
 
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            try:
-                analysis_results = loop.run_until_complete(run_business_analysis())
-            finally:
-                loop.close()
+                    on_progress("starting", "Starting business sentiment analysis...")
+
+                    loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(loop)
+                    try:
+                        analysis_results = loop.run_until_complete(
+                            analyzer.analyze_business_sentiment(
+                                google_maps_url=google_maps_url,
+                                max_reviews=max_reviews,
+                            )
+                        )
+                    finally:
+                        loop.close()
+
+                    result_holder[0] = analysis_results
+                except Exception as e:
+                    import traceback
+                    logging.error(f"Business analysis worker error: {e}\n{traceback.format_exc()}")
+                    error_holder[0] = str(e)
+                finally:
+                    progress_q.put(("done", None, None, None))
+
+            # Start the background worker thread
+            worker = threading.Thread(target=background_worker, daemon=True)
+            worker.start()
+
+            # Main generator: yield progress keepalives + final SSE events
+            KEEPALIVE_INTERVAL = 5
+
+            while True:
+                try:
+                    msg_type, stage, message, data = progress_q.get(timeout=KEEPALIVE_INTERVAL)
+                except queue.Empty:
+                    yield _sse_keepalive()
+                    continue
+
+                if msg_type == "progress":
+                    yield _sse_progress_message(stage, message, data)
+                elif msg_type == "done":
+                    break
 
             # Check for errors
+            if error_holder[0]:
+                yield "data: " + json.dumps({"error": f"Analysis failed: {error_holder[0]}"}) + "\n\n"
+                return
+
+            analysis_results = result_holder[0]
+            if analysis_results is None:
+                yield "data: " + json.dumps({"error": "No results returned from analysis"}) + "\n\n"
+                return
+
+            # Check for errors in results
             if analysis_results.get("error"):
                 error_payload = {
                     "error": analysis_results.get("error"),
@@ -452,14 +589,12 @@ def business_sentiment_analysis():
             total_reviews = analysis_results.get("total_reviews_analyzed", 0)
 
             # Extract token usage from ai_insights
+            total_tokens = 0
             if isinstance(ai_insights, dict):
                 insights_obj = ai_insights.get("insights", {}) or {}
                 token_usage_data = insights_obj.get("token_usage") or ai_insights.get("token_usage") or {}
                 if token_usage_data:
-                    total_input_tokens = token_usage_data.get("input_tokens", 0)
-                    total_output_tokens = token_usage_data.get("output_tokens", 0)
                     total_tokens = token_usage_data.get("total_tokens", 0)
-                    total_cost = token_usage_data.get("total_cost", 0.0)
 
             # Initialize payload structure to match competitors analysis format
             payload = {

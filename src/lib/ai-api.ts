@@ -87,6 +87,16 @@ export interface TrustpilotAnalysisPayload {
   error?: string | null;
 }
 
+// ─── Progress event type ─────────────────────────────────────────────────────
+
+export interface AnalysisProgressEvent {
+  _progress: true;
+  stage: string;
+  message: string;
+  timestamp: number;
+  data?: Record<string, unknown>;
+}
+
 // ─── Generic SSE Streamer ────────────────────────────────────────────────────
 
 function createSSEStream<T>(
@@ -95,6 +105,7 @@ function createSSEStream<T>(
   onData: (payload: T) => void,
   onError: (err: string) => void,
   onComplete: () => void,
+  onProgress?: (event: AnalysisProgressEvent) => void,
 ): AbortController {
   const controller = new AbortController();
 
@@ -129,13 +140,21 @@ function createSSEStream<T>(
         buffer = lines.pop() || "";
 
         for (const line of lines) {
+          // SSE comment lines (keepalive) start with ": " — skip them
+          if (line.startsWith(": ")) continue;
+
           if (line.startsWith("data: ")) {
             try {
-              const payload = JSON.parse(line.slice(6)) as T;
+              const payload = JSON.parse(line.slice(6));
+              // Check if this is a progress event (keep-alive / status update)
+              if (payload && payload._progress === true) {
+                if (onProgress) onProgress(payload as AnalysisProgressEvent);
+                continue; // don't pass progress events to onData
+              }
               if (payload && typeof payload === "object" && "error" in payload && (payload as { error?: string | null }).error) {
                 onError((payload as { error: string }).error);
               } else {
-                onData(payload);
+                onData(payload as T);
               }
             } catch {
               // skip malformed SSE lines
@@ -168,6 +187,7 @@ export interface MarketAnalysisParams {
     onData: (payload: MarketAnalysisPayload) => void,
     onError: (err: string) => void,
     onComplete: () => void,
+    onProgress?: (event: AnalysisProgressEvent) => void,
   ): AbortController {
     return createSSEStream<MarketAnalysisPayload>(
       "/customer-sentiment-analysis",
@@ -180,6 +200,7 @@ export interface MarketAnalysisParams {
       onData,
       onError,
       onComplete,
+      onProgress,
     );
   }
 
@@ -196,6 +217,7 @@ export interface BusinessAnalysisParams {
     onData: (payload: MarketAnalysisPayload) => void,
     onError: (err: string) => void,
     onComplete: () => void,
+    onProgress?: (event: AnalysisProgressEvent) => void,
   ): AbortController {
     return createSSEStream<MarketAnalysisPayload>(
       "/business-sentiment-analysis",
@@ -206,6 +228,7 @@ export interface BusinessAnalysisParams {
       onData,
       onError,
       onComplete,
+      onProgress,
     );
   }
 

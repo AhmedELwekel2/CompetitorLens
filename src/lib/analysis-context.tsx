@@ -15,6 +15,7 @@ import {
   MarketAnalysisPayload,
   MarketAnalysisParams,
   BusinessAnalysisParams,
+  AnalysisProgressEvent,
 } from "./ai-api";
 import { saveAnalysis } from "./api";
 
@@ -42,6 +43,10 @@ interface ActiveAnalysis {
   params: MarketAnalysisParams | BusinessAnalysisParams | null;
   /** Extra metadata for re-saving on completion */
   meta: Record<string, unknown> | null;
+  /** Current progress message from the backend (keeps connection alive) */
+  progressMessage: string | null;
+  /** Current progress stage */
+  progressStage: string | null;
 }
 
 interface AnalysisCtx {
@@ -82,6 +87,8 @@ const defaultAnalysis: ActiveAnalysis = {
   controller: null,
   params: null,
   meta: null,
+  progressMessage: null,
+  progressStage: null,
 };
 
 const AnalysisContext = createContext<AnalysisCtx>({
@@ -180,6 +187,8 @@ export function AnalysisProvider({ children }: { children: ReactNode }) {
             loading: false,
             completed: true,
             data: payload,
+            progressMessage: null,
+            progressStage: null,
           }));
           if (!marketHadErrorRef.current && payload) {
             addNotification({
@@ -197,6 +206,13 @@ export function AnalysisProvider({ children }: { children: ReactNode }) {
               payload: payload as unknown as Record<string, unknown>,
             }).catch(() => {});
           }
+        },
+        (progressEvent) => {
+          setMarket((prev) => ({
+            ...prev,
+            progressMessage: progressEvent.message,
+            progressStage: progressEvent.stage,
+          }));
         }
       );
 
@@ -209,6 +225,8 @@ export function AnalysisProvider({ children }: { children: ReactNode }) {
         controller,
         params,
         meta: meta || null,
+        progressMessage: "Starting analysis...",
+        progressStage: "starting",
       });
     },
     [addNotification]
@@ -246,6 +264,8 @@ export function AnalysisProvider({ children }: { children: ReactNode }) {
             loading: false,
             completed: true,
             data: payload,
+            progressMessage: null,
+            progressStage: null,
           }));
           if (!businessHadErrorRef.current && payload) {
             addNotification({
@@ -264,6 +284,13 @@ export function AnalysisProvider({ children }: { children: ReactNode }) {
               payload: payload as unknown as Record<string, unknown>,
             }).catch(() => {});
           }
+        },
+        (progressEvent) => {
+          setBusiness((prev) => ({
+            ...prev,
+            progressMessage: progressEvent.message,
+            progressStage: progressEvent.stage,
+          }));
         }
       );
 
@@ -276,6 +303,8 @@ export function AnalysisProvider({ children }: { children: ReactNode }) {
         controller,
         params,
         meta: meta || null,
+        progressMessage: "Starting analysis...",
+        progressStage: "starting",
       });
     },
     [addNotification]
