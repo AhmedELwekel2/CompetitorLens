@@ -12,6 +12,17 @@ import enum
 
 # ─── Enums ────────────────────────────────────────────────────────────────────
 
+class UserRole(str, enum.Enum):
+    ADMIN = "ADMIN"
+    USER = "USER"
+
+
+class UserStatus(str, enum.Enum):
+    PENDING = "PENDING"
+    APPROVED = "APPROVED"
+    REJECTED = "REJECTED"
+
+
 class AnalysisType(str, enum.Enum):
     MARKET = "MARKET"
     SINGLE = "SINGLE"
@@ -35,6 +46,8 @@ class User(Base):
     professional_title = Column(String(255), default="")
     hashed_password = Column(String(255), nullable=False)
     avatar_initials = Column(String(5), default="")
+    role = Column(SAEnum(UserRole), default=UserRole.USER, nullable=False)
+    status = Column(SAEnum(UserStatus), default=UserStatus.PENDING, nullable=False)
     is_active = Column(Boolean, default=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)

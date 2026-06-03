@@ -8,7 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from database import get_db
 from models import User, Analysis, Competitor, AnalysisType, AnalysisStatus
 from schemas import MarketAnalysisRequest
-from routers.auth import get_current_user
+from routers.auth import get_current_user, require_approved_user
 from services.analysis_service import AnalysisService
 
 router = APIRouter(prefix="/market-analysis", tags=["market-analysis"])
@@ -18,7 +18,7 @@ service = AnalysisService()
 @router.post("/run")
 async def run_market_analysis(
     body: MarketAnalysisRequest,
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_approved_user),
     db: AsyncSession = Depends(get_db),
 ):
     """

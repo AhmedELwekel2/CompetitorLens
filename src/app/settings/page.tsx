@@ -44,10 +44,15 @@ function formatNumber(n: number): string {
   return n.toLocaleString();
 }
 
+/** Parse a naive-UTC ISO string from the backend as a proper UTC date */
+function parseUTC(iso: string): Date {
+  return new Date(iso.includes("Z") || iso.includes("+") ? iso : iso + "Z");
+}
+
 function formatDate(iso: string): string {
   if (!iso) return "—";
   try {
-    return new Date(iso).toLocaleDateString("en-US", {
+    return parseUTC(iso).toLocaleDateString("en-US", {
       month: "short",
       day: "numeric",
       year: "numeric",
@@ -59,7 +64,7 @@ function formatDate(iso: string): string {
 
 export default function SettingsPage() {
   const { user } = useAuth();
-  const [activeTab, setActiveTab] = useState("profile");
+  const [activeTab, setActiveTab] = useState("limits");
   const [settings, setSettingsState] = useState<SettingsType | null>(null);
   const [usageStats, setUsageStats] = useState<UsageStats | null>(null);
   const [usageLoading, setUsageLoading] = useState(false);
@@ -89,7 +94,7 @@ export default function SettingsPage() {
 
   const initials = user?.avatar_initials || "U";
   const memberSince = user?.created_at
-    ? new Date(user.created_at).toLocaleDateString("en-US", {
+    ? parseUTC(user.created_at).toLocaleDateString("en-US", {
         month: "long",
         year: "numeric",
       })
@@ -97,7 +102,7 @@ export default function SettingsPage() {
 
   return (
     <>
-      <TopBar placeholder="Search intelligence data..." />
+      <TopBar placeholder="Search intelligence data..." hideActions hideSearch />
 
       <div className="mb-8">
         <h1 className="text-3xl font-bold text-text-heading">Settings</h1>

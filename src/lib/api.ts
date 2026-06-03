@@ -70,6 +70,8 @@ export interface User {
   email: string;
   professional_title: string;
   avatar_initials: string;
+  role: "ADMIN" | "USER";
+  status: "PENDING" | "APPROVED" | "REJECTED";
   is_active: boolean;
   created_at: string;
 }
@@ -120,6 +122,135 @@ export async function updateProfile(data: {
 
 export function logout() {
   setToken(null);
+}
+
+// ─── Admin ───────────────────────────────────────────────────────────────────
+
+export interface AdminUser {
+  id: string;
+  full_name: string;
+  email: string;
+  professional_title: string;
+  avatar_initials: string;
+  role: "ADMIN" | "USER";
+  status: "PENDING" | "APPROVED" | "REJECTED";
+  is_active: boolean;
+  created_at: string;
+}
+
+export interface AdminUserList {
+  items: AdminUser[];
+  total: number;
+  page: number;
+  per_page: number;
+  total_pages: number;
+}
+
+export interface AdminStats {
+  total_users: number;
+  pending_users: number;
+  approved_users: number;
+  rejected_users: number;
+  active_users: number;
+  total_analyses: number;
+  completed_analyses: number;
+  failed_analyses: number;
+  total_tokens: number;
+  estimated_cost: number;
+}
+
+export interface UserUsage {
+  user_id: string;
+  full_name: string;
+  email: string;
+  avatar_initials: string;
+  status: string;
+  role: string;
+  is_active: boolean;
+  total_analyses: number;
+  completed_analyses: number;
+  failed_analyses: number;
+  total_tokens: number;
+  estimated_cost: number;
+  last_activity: string | null;
+}
+
+export interface UserUsageDetail {
+  user_id: string;
+  full_name: string;
+  email: string;
+  status: string;
+  role: string;
+  total_analyses: number;
+  completed_analyses: number;
+  failed_analyses: number;
+  processing_analyses: number;
+  total_tokens: number;
+  estimated_cost: number;
+  last_activity: string | null;
+  recent_analyses: Array<{
+    id: string;
+    title: string;
+    analysis_type: string | null;
+    status: string | null;
+    tokens: number;
+    created_at: string | null;
+    completed_at: string | null;
+  }>;
+  usage_over_time: Array<{
+    date: string | null;
+    tokens: number;
+  }>;
+}
+
+export async function getAdminUsers(params?: {
+  page?: number;
+  per_page?: number;
+  search?: string;
+  status?: string;
+  role?: string;
+}): Promise<AdminUserList> {
+  const qs = new URLSearchParams();
+  if (params?.page) qs.set("page", String(params.page));
+  if (params?.per_page) qs.set("per_page", String(params.per_page));
+  if (params?.search) qs.set("search", params.search);
+  if (params?.status) qs.set("status", params.status);
+  if (params?.role) qs.set("role", params.role);
+  return apiFetch<AdminUserList>(`/admin/users?${qs.toString()}`);
+}
+
+export async function getAdminUser(userId: string): Promise<AdminUser> {
+  return apiFetch<AdminUser>(`/admin/users/${userId}`);
+}
+
+export async function updateAdminUser(
+  userId: string,
+  data: {
+    status?: "PENDING" | "APPROVED" | "REJECTED";
+    role?: "ADMIN" | "USER";
+    is_active?: boolean;
+  }
+): Promise<AdminUser> {
+  return apiFetch<AdminUser>(`/admin/users/${userId}`, {
+    method: "PATCH",
+    body: JSON.stringify(data),
+  });
+}
+
+export async function deleteAdminUser(userId: string): Promise<void> {
+  await apiFetch(`/admin/users/${userId}`, { method: "DELETE" });
+}
+
+export async function getAdminStats(): Promise<AdminStats> {
+  return apiFetch<AdminStats>("/admin/stats");
+}
+
+export async function getUserUsageList(): Promise<UserUsage[]> {
+  return apiFetch<UserUsage[]>("/admin/user-usage");
+}
+
+export async function getUserUsageDetail(userId: string): Promise<UserUsageDetail> {
+  return apiFetch<UserUsageDetail>(`/admin/users/${userId}/usage`);
 }
 
 // ─── Settings ────────────────────────────────────────────────────────────────

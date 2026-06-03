@@ -61,7 +61,7 @@ export default function MarketAnalysisPage() {
 
   return (
     <>
-      <TopBar placeholder="Search insights or reports..." />
+      <TopBar placeholder="Search insights or reports..." hideActions />
 
       {/* Page header */}
       <div className="mb-8">

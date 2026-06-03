@@ -2,7 +2,7 @@ from pydantic import BaseModel, EmailStr, Field
 from typing import Optional
 from datetime import datetime
 from uuid import UUID
-from models import AnalysisType, AnalysisStatus
+from models import AnalysisType, AnalysisStatus, UserRole, UserStatus
 
 
 # ─── Auth / User ──────────────────────────────────────────────────────────────
@@ -31,6 +31,8 @@ class UserOut(BaseModel):
     email: str
     professional_title: str
     avatar_initials: str
+    role: UserRole = UserRole.USER
+    status: UserStatus = UserStatus.PENDING
     is_active: bool
     created_at: datetime
 
@@ -42,6 +44,36 @@ class TokenOut(BaseModel):
     access_token: str
     token_type: str = "bearer"
     user: UserOut
+
+
+class AdminUserOut(BaseModel):
+    """Full user info for admin dashboard"""
+    id: UUID
+    full_name: str
+    email: str
+    professional_title: str
+    avatar_initials: str
+    role: UserRole = UserRole.USER
+    status: UserStatus = UserStatus.PENDING
+    is_active: bool
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class AdminUserUpdate(BaseModel):
+    status: Optional[UserStatus] = None
+    role: Optional[UserRole] = None
+    is_active: Optional[bool] = None
+
+
+class AdminUserList(BaseModel):
+    items: list[AdminUserOut]
+    total: int
+    page: int
+    per_page: int
+    total_pages: int
 
 
 # ─── Settings ─────────────────────────────────────────────────────────────────

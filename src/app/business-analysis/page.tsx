@@ -4,13 +4,8 @@ import TopBar from "@/components/TopBar";
 import {
   ArrowRight,
   Settings2,
-  ShieldCheck,
-  Lightbulb,
   Building2,
-  Coffee,
-  Dumbbell,
   ChevronDown,
-  Loader2,
   XCircle,
   CheckCircle2,
   Star,
@@ -23,12 +18,6 @@ import MarkdownRenderer from "@/components/MarkdownRenderer";
 function Card({ children, className = "" }: { children: React.ReactNode; className?: string }) {
   return <div className={`bg-bg-card rounded-xl border border-border ${className}`}>{children}</div>;
 }
-
-const recentEntities = [
-  { name: "Global Tech Solutions", time: "Analyzed 2h ago", icon: Building2 },
-  { name: "The Roasting Hub", time: "Analyzed yesterday", icon: Coffee },
-  { name: "Apex Fitness Center", time: "Analyzed 3d ago", icon: Dumbbell },
-];
 
 export default function BusinessAnalysisPage() {
   const [depth, setDepth] = useState<"standard" | "sentiment">("standard");
@@ -64,7 +53,7 @@ export default function BusinessAnalysisPage() {
 
   return (
     <>
-      <TopBar placeholder="Search insights..." />
+      <TopBar placeholder="Search insights..." hideActions />
 
       {/* Header */}
       <div className="mb-8">
@@ -245,29 +234,6 @@ export default function BusinessAnalysisPage() {
             </>
           )}
 
-          {/* Tips */}
-          {!hasResults && !loading && !error && (
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              <Card className="p-5 flex gap-3">
-                <Lightbulb size={18} className="text-accent-green flex-shrink-0 mt-0.5" />
-                <div>
-                  <h3 className="text-sm font-bold text-text-heading mb-1">Precision Tip</h3>
-                  <p className="text-xs text-text-secondary leading-relaxed">
-                    For local competitors, use the "Full History" option to uncover seasonal service fluctuations.
-                  </p>
-                </div>
-              </Card>
-              <Card className="p-5 flex gap-3">
-                <ShieldCheck size={18} className="text-accent-green flex-shrink-0 mt-0.5" />
-                <div>
-                  <h3 className="text-sm font-bold text-text-heading mb-1">Data Privacy</h3>
-                  <p className="text-xs text-text-secondary leading-relaxed">
-                    All scraped data is anonymized and stored in your private vault. We never share your analysis targets.
-                  </p>
-                </div>
-              </Card>
-            </div>
-          )}
         </div>
 
         {/* Right sidebar */}
@@ -286,28 +252,6 @@ export default function BusinessAnalysisPage() {
             </p>
           </div>
 
-          <Card className="p-5">
-            <div className="flex items-center justify-between mb-4">
-              <span className="text-[10px] font-semibold uppercase tracking-[0.12em] text-text-muted">Recent Entities</span>
-              <button className="text-xs font-semibold text-primary hover:underline">View All</button>
-            </div>
-            <div className="space-y-3.5">
-              {recentEntities.map((e) => {
-                const Icon = e.icon;
-                return (
-                  <div key={e.name} className="flex items-center gap-3">
-                    <div className="w-9 h-9 rounded-lg bg-bg-main flex items-center justify-center flex-shrink-0">
-                      <Icon size={16} className="text-text-secondary" />
-                    </div>
-                    <div className="min-w-0">
-                      <p className="text-[13px] font-medium text-text-heading truncate">{e.name}</p>
-                      <p className="text-[11px] text-text-muted">{e.time}</p>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          </Card>
         </div>
       </div>
 

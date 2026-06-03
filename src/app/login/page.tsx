@@ -22,10 +22,11 @@ export default function LoginPage() {
     try {
       if (mode === "login") {
         await login(email, password);
+        router.push("/market-analysis");
       } else {
         await register({ full_name: fullName, email, password });
+        router.push("/pending-approval");
       }
-      router.push("/market-analysis");
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "Something went wrong");
     } finally {

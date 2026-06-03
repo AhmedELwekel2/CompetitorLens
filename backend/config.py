@@ -41,6 +41,11 @@ class Settings(BaseSettings):
     SECRET_KEY: str = os.getenv("SECRET_KEY", "change-me-in-production-please")
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 60 * 24  # 1 day
 
+    # Admin defaults
+    ADMIN_EMAIL: str = os.getenv("ADMIN_EMAIL", "admin@competitorlens.com")
+    ADMIN_PASSWORD: str = os.getenv("ADMIN_PASSWORD", "Admin@2024!")
+    ADMIN_FULL_NAME: str = os.getenv("ADMIN_FULL_NAME", "Admin")
+
     class Config:
         env_file = ".env"
         case_sensitive = True

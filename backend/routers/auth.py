@@ -9,7 +9,7 @@ from jose import jwt, JWTError
 
 from database import get_db
 from config import get_settings
-from models import User, UserSettings
+from models import User, UserSettings, UserRole, UserStatus
 from schemas import UserCreate, UserLogin, UserOut, UserUpdate, TokenOut
 
 router = APIRouter(prefix="/auth", tags=["auth"])
@@ -62,6 +62,29 @@ async def get_current_user(
     return user
 
 
+async def require_approved_user(
+    user: User = Depends(get_current_user),
+) -> User:
+    """Dependency that requires the user to be approved (or admin)."""
+    if user.role == UserRole.ADMIN:
+        return user
+    if user.status != UserStatus.APPROVED:
+        raise HTTPException(
+            status_code=403,
+            detail=f"Account is {user.status.value.lower()}. Please wait for admin approval.",
+        )
+    return user
+
+
+async def require_admin(
+    user: User = Depends(get_current_user),
+) -> User:
+    """Dependency that requires the user to be an admin."""
+    if user.role != UserRole.ADMIN:
+        raise HTTPException(status_code=403, detail="Admin access required")
+    return user
+
+
 # ─── Endpoints ────────────────────────────────────────────────────────────────
 
 @router.post("/register", response_model=TokenOut, status_code=201)
@@ -96,6 +119,11 @@ async def login(body: UserLogin, db: AsyncSession = Depends(get_db)):
     user = result.scalar_one_or_none()
     if not user or not _verify_password(body.password, user.hashed_password):
         raise HTTPException(status_code=401, detail="Invalid email or password")
+
+    if user.status == UserStatus.PENDING:
+        raise HTTPException(status_code=403, detail="Your account is pending admin approval.")
+    if user.status == UserStatus.REJECTED:
+        raise HTTPException(status_code=403, detail="Your account has been rejected. Contact admin.")
 
     token = _create_token(str(user.id))
     return TokenOut(access_token=token, user=UserOut.model_validate(user))

@@ -89,7 +89,9 @@ export default function HistoryPage() {
   };
 
   const formatDate = (iso: string) => {
-    const d = new Date(iso);
+    // Backend stores naive UTC timestamps (no timezone suffix).
+    // Append 'Z' so JavaScript treats them as UTC and converts to local time correctly.
+    const d = new Date(iso.includes("Z") || iso.includes("+") ? iso : iso + "Z");
     return d.toLocaleDateString("en-US", {
       month: "short", day: "numeric", year: "numeric",
     }) + " · " + d.toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" });
@@ -97,7 +99,7 @@ export default function HistoryPage() {
 
   return (
     <>
-      <TopBar placeholder="Search reports, entities, or dates..." />
+      <TopBar placeholder="Search reports, entities, or dates..." hideActions />
 
       <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-4 mb-6">
         <div>
@@ -107,9 +109,6 @@ export default function HistoryPage() {
           </p>
         </div>
         <div className="flex items-center gap-3 flex-shrink-0">
-          <button className="px-4 py-2.5 rounded-lg border border-border bg-white text-sm font-medium text-text-primary hover:bg-bg-main transition-colors flex items-center gap-2">
-            <Download size={15} /> Export List
-          </button>
           <a href="/market-analysis" className="px-4 py-2.5 rounded-lg bg-primary text-white text-sm font-semibold hover:bg-primary-hover transition-colors flex items-center gap-2">
             <Plus size={15} /> New Analysis
           </a>

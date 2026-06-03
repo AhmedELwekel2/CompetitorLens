@@ -11,6 +11,7 @@ import {
   Menu,
   LogOut,
   Loader2,
+  ShieldCheck,
 } from "lucide-react";
 import { useState, useEffect } from "react";
 import { useAuth } from "@/lib/auth";
@@ -21,6 +22,10 @@ const navItems = [
   { href: "/business-analysis", label: "Business Analysis", icon: Building2, type: "BUSINESS" as const },
   { href: "/history", label: "History", icon: Clock, type: null },
   { href: "/settings", label: "Settings", icon: Settings, type: null },
+];
+
+const adminItems = [
+  { href: "/admin", label: "Admin Dashboard", icon: ShieldCheck },
 ];
 
 export default function Sidebar() {
@@ -101,6 +106,33 @@ export default function Sidebar() {
 
         {/* Nav */}
         <nav className="flex-1 px-3 space-y-1">
+          {/* Admin links */}
+          {user?.role === "ADMIN" && (
+            <>
+              {adminItems.map((item) => {
+                const isActive = pathname === item.href;
+                const Icon = item.icon;
+                return (
+                  <Link
+                    key={item.href}
+                    href={item.href}
+                    className={`
+                      flex items-center gap-3 px-3 py-2.5 rounded-lg text-[13.5px] font-medium transition-all duration-150 relative
+                      ${
+                        isActive
+                          ? "bg-sidebar-active text-accent-green border-l-3 border-accent-green -ml-0.5 pl-3.5"
+                          : "text-amber-400/80 hover:text-amber-300 hover:bg-sidebar-hover"
+                      }
+                    `}
+                  >
+                    <Icon size={18} strokeWidth={isActive ? 2.2 : 1.8} />
+                    <span>{item.label}</span>
+                  </Link>
+                );
+              })}
+              <div className="my-2 border-t border-white/10" />
+            </>
+          )}
           {navItems.map((item) => {
             const isActive = pathname === item.href;
             const Icon = item.icon;

@@ -4,6 +4,7 @@ import Sidebar from "@/components/Sidebar";
 import NotificationToast from "@/components/NotificationToast";
 import { AuthProvider } from "@/lib/auth";
 import { AnalysisProvider } from "@/lib/analysis-context";
+import { AuthGuard } from "@/components/AuthGuard";
 
 export const metadata: Metadata = {
   title: "CompetitorLens — Trusted Advisor Intelligence",
@@ -16,13 +17,15 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
       <body className="min-h-screen flex bg-bg-main">
         <AuthProvider>
           <AnalysisProvider>
-            <Sidebar />
-            <NotificationToast />
-            <main className="flex-1 min-w-0 overflow-y-auto">
-              <div className="p-5 lg:p-8 max-w-[1440px]">
-                {children}
-              </div>
-            </main>
+            <AuthGuard>
+              <Sidebar />
+              <NotificationToast />
+              <main className="flex-1 min-w-0 overflow-y-auto">
+                <div className="p-5 lg:p-8 max-w-[1440px]">
+                  {children}
+                </div>
+              </main>
+            </AuthGuard>
           </AnalysisProvider>
         </AuthProvider>
       </body>
