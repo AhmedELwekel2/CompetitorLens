@@ -19,3 +19,4 @@ plotly>=5.22.0
 
 # Utils
 python-dotenv>=1.0.0
+tiktoken>=0.7.0
