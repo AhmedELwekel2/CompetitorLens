@@ -12,11 +12,16 @@ import {
 import {
   runAiMarketAnalysis,
   runAiBusinessAnalysis,
+  reconnectToMarketJob,
   MarketAnalysisPayload,
   MarketAnalysisParams,
   BusinessAnalysisParams,
   AnalysisProgressEvent,
 } from "./ai-api";
+
+// ─── Job persistence keys ────────────────────────────────────────────────────
+const MARKET_JOB_KEY = "cl_market_job";
+const JOB_TTL_MS = 7200_000; // 2 hours — matches backend TTL
 import { saveAnalysis } from "./api";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -105,11 +110,45 @@ const AnalysisContext = createContext<AnalysisCtx>({
 
 // ─── Provider ─────────────────────────────────────────────────────────────────
 
+function _readStoredJob(): ActiveAnalysis {
+  // Runs synchronously during render (useState lazy init).
+  // typeof window guard prevents server-side crash (localStorage is client-only).
+  if (typeof window === "undefined") return { ...defaultAnalysis, type: "MARKET" };
+  try {
+    const raw = localStorage.getItem(MARKET_JOB_KEY);
+    if (!raw) return { ...defaultAnalysis, type: "MARKET" };
+    const { jobId, params, meta, startedAt } = JSON.parse(raw) as {
+      jobId: string;
+      params: MarketAnalysisParams;
+      meta: Record<string, unknown> | null;
+      startedAt: number;
+    };
+    if (!jobId || Date.now() - startedAt > JOB_TTL_MS) {
+      localStorage.removeItem(MARKET_JOB_KEY);
+      return { ...defaultAnalysis, type: "MARKET" };
+    }
+    // Return loading=true immediately so the spinner shows on first paint
+    return {
+      type: "MARKET",
+      loading: true,
+      data: null,
+      error: null,
+      completed: false,
+      controller: null, // useEffect wires up the real controller
+      params,
+      meta: meta || null,
+      progressMessage: "Reconnecting to analysis...",
+      progressStage: "reconnecting",
+    };
+  } catch {
+    return { ...defaultAnalysis, type: "MARKET" };
+  }
+}
+
 export function AnalysisProvider({ children }: { children: ReactNode }) {
-  const [market, setMarket] = useState<ActiveAnalysis>({
-    ...defaultAnalysis,
-    type: "MARKET",
-  });
+  // Lazy initializer reads localStorage synchronously — spinner visible on first paint,
+  // no flash of the empty state before useEffect fires.
+  const [market, setMarket] = useState<ActiveAnalysis>(_readStoredJob);
   const [business, setBusiness] = useState<ActiveAnalysis>({
     ...defaultAnalysis,
     type: "BUSINESS",
@@ -164,14 +203,28 @@ export function AnalysisProvider({ children }: { children: ReactNode }) {
 
       const countryLabel = (meta as { countryLabel?: string } | undefined)?.countryLabel || params.country || "Global";
 
+      // Generate job ID and persist it BEFORE the request starts.
+      // This guarantees localStorage is populated even if the user refreshes
+      // immediately, without depending on receiving an event from the backend.
+      const jobId = `cl-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 9)}`;
+      try {
+        localStorage.setItem(MARKET_JOB_KEY, JSON.stringify({
+          jobId,
+          params,
+          meta: meta || null,
+          startedAt: Date.now(),
+        }));
+      } catch { /* storage may be unavailable in some environments */ }
+
       const controller = runAiMarketAnalysis(
-        params,
+        { ...params, job_id: jobId },
         (payload) => {
           marketDataRef.current = payload;
           setMarket((prev) => ({ ...prev, data: payload }));
         },
         (err) => {
           marketHadErrorRef.current = true;
+          try { localStorage.removeItem(MARKET_JOB_KEY); } catch { /* */ }
           setMarket((prev) => ({ ...prev, error: err, loading: false }));
           addNotification({
             type: "MARKET",
@@ -182,6 +235,7 @@ export function AnalysisProvider({ children }: { children: ReactNode }) {
         },
         () => {
           const payload = marketDataRef.current;
+          try { localStorage.removeItem(MARKET_JOB_KEY); } catch { /* */ }
           setMarket((prev) => ({
             ...prev,
             loading: false,
@@ -207,7 +261,7 @@ export function AnalysisProvider({ children }: { children: ReactNode }) {
             }).catch(() => {});
           }
         },
-        (progressEvent) => {
+        (progressEvent: AnalysisProgressEvent) => {
           setMarket((prev) => ({
             ...prev,
             progressMessage: progressEvent.message,
@@ -231,6 +285,166 @@ export function AnalysisProvider({ children }: { children: ReactNode }) {
     },
     [addNotification]
   );
+
+  // ─── Reconnect on mount (survives refresh / logout) ───────────────────────
+  useEffect(() => {
+    let stored: string | null = null;
+    try { stored = localStorage.getItem(MARKET_JOB_KEY); } catch { /* */ }
+    if (!stored) return;
+
+    let jobId: string;
+    let params: MarketAnalysisParams;
+    let meta: Record<string, unknown> | null;
+    let startedAt: number;
+    try {
+      ({ jobId, params, meta, startedAt } = JSON.parse(stored) as {
+        jobId: string;
+        params: MarketAnalysisParams;
+        meta: Record<string, unknown> | null;
+        startedAt: number;
+      });
+    } catch {
+      try { localStorage.removeItem(MARKET_JOB_KEY); } catch { /* */ }
+      return;
+    }
+
+    if (!jobId || Date.now() - startedAt > JOB_TTL_MS) {
+      try { localStorage.removeItem(MARKET_JOB_KEY); } catch { /* */ }
+      return;
+    }
+
+    marketDataRef.current = null;
+    marketHadErrorRef.current = false;
+
+    const countryLabel =
+      (meta as { countryLabel?: string } | null)?.countryLabel ||
+      params.country ||
+      "Global";
+
+    // ── retry state ────────────────────────────────────────────────────────
+    const MAX_RETRIES = 5;
+    let attempt = 0;
+    let retryTimer: ReturnType<typeof setTimeout> | null = null;
+    let mounted = true;
+    let activeController: AbortController | null = null;
+
+    const attempt_reconnect = () => {
+      if (!mounted) return;
+
+      activeController = reconnectToMarketJob(
+        jobId,
+        // onData
+        (payload) => {
+          if (!mounted) return;
+          marketDataRef.current = payload;
+          setMarket((prev) => ({ ...prev, data: payload }));
+        },
+        // onError
+        (err) => {
+          if (!mounted) return;
+          if (err === "job_not_found" && attempt < MAX_RETRIES) {
+            // Server may still be starting up — keep the spinner and retry
+            attempt += 1;
+            setMarket((prev) => ({
+              ...prev,
+              progressMessage: `Analysis running on server — reconnecting… (${attempt}/${MAX_RETRIES})`,
+            }));
+            retryTimer = setTimeout(attempt_reconnect, 6000);
+          } else {
+            // Exhausted retries — let the user decide; keep loading so Cancel is visible
+            try { localStorage.removeItem(MARKET_JOB_KEY); } catch { /* */ }
+            setMarket((prev) => ({
+              ...prev,
+              progressMessage: "Could not reach the server. Your analysis may still be running. Click Cancel to dismiss.",
+            }));
+          }
+        },
+        // onComplete
+        () => {
+          if (!mounted) return;
+          const payload = marketDataRef.current;
+
+          // Treat as incomplete if we didn't receive a final payload with
+          // competitor data. This covers: no data at all (null), partial data
+          // from an early SSE event, or a premature stream close (nginx timeout).
+          const isComplete =
+            payload &&
+            payload.competitorsAnalyzed &&
+            payload.competitorsAnalyzed.length > 0;
+
+          if (!isComplete && attempt < MAX_RETRIES) {
+            attempt += 1;
+            setMarket((prev) => ({
+              ...prev,
+              progressMessage: `Reconnecting to analysis… (${attempt}/${MAX_RETRIES})`,
+            }));
+            retryTimer = setTimeout(attempt_reconnect, 3000);
+            return;
+          }
+
+          try { localStorage.removeItem(MARKET_JOB_KEY); } catch { /* */ }
+          setMarket((prev) => ({
+            ...prev,
+            loading: false,
+            completed: true,
+            data: payload,
+            progressMessage: null,
+            progressStage: null,
+          }));
+          if (!marketHadErrorRef.current && payload) {
+            addNotification({
+              type: "MARKET",
+              title: payload?.analysisTitle || `Market Analysis — ${params.industry}`,
+              success: true,
+            });
+            void saveAnalysis({
+              analysis_type: "MARKET",
+              title: payload.analysisTitle || `${params.industry} Industry Analysis - ${countryLabel}`,
+              subtitle: "Market Sentiment Overview",
+              industry: params.industry,
+              country: countryLabel,
+              payload: payload as unknown as Record<string, unknown>,
+            }).catch(() => {});
+          }
+        },
+        // onProgress
+        (progressEvent: AnalysisProgressEvent) => {
+          if (!mounted) return;
+          setMarket((prev) => ({
+            ...prev,
+            progressMessage: progressEvent.message,
+            progressStage: progressEvent.stage,
+          }));
+        },
+      );
+
+      // Store the live controller so the Cancel button can abort it
+      setMarket((prev) => ({ ...prev, controller: activeController }));
+    };
+
+    // Show spinner immediately, then start first attempt
+    setMarket({
+      type: "MARKET",
+      loading: true,
+      data: null,
+      error: null,
+      completed: false,
+      controller: null,
+      params,
+      meta: meta || null,
+      progressMessage: "Reconnecting to analysis…",
+      progressStage: "reconnecting",
+    });
+
+    attempt_reconnect();
+
+    return () => {
+      mounted = false;
+      if (retryTimer) clearTimeout(retryTimer);
+      activeController?.abort();
+    };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []); // intentionally runs only on mount
 
   // ─── Business Analysis ────────────────────────────────────────────────────
 
@@ -314,6 +528,7 @@ export function AnalysisProvider({ children }: { children: ReactNode }) {
 
   const cancelAnalysis = useCallback((type: AnalysisType) => {
     if (type === "MARKET") {
+      try { localStorage.removeItem(MARKET_JOB_KEY); } catch { /* */ }
       setMarket((prev) => {
         prev.controller?.abort();
         return { ...defaultAnalysis, type: "MARKET" };
@@ -330,6 +545,7 @@ export function AnalysisProvider({ children }: { children: ReactNode }) {
 
   const resetAnalysis = useCallback((type: AnalysisType) => {
     if (type === "MARKET") {
+      try { localStorage.removeItem(MARKET_JOB_KEY); } catch { /* */ }
       setMarket((prev) => {
         prev.controller?.abort();
         return { ...defaultAnalysis, type: "MARKET" };

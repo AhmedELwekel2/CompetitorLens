@@ -4139,6 +4139,19 @@ class GPTInsightsService:
         -------------------------------------------
         Now analyze the following sentiment data:
         """
+        # Extract optional user context for more targeted insights
+        user_context = sentiment_data.get("user_context") or {}
+        user_context_section = ""
+        if any(user_context.get(k) for k in ("company_name", "business_description", "main_goal", "target_audience_country", "additional_context")):
+            user_context_section = f"""
+        User/Client Context (use this to tailor recommendations):
+        - Client Company: {user_context.get('company_name') or 'Not provided'}
+        - Business Description: {user_context.get('business_description') or 'Not provided'}
+        - Analysis Goal: {user_context.get('main_goal') or 'Not provided'}
+        - Target Audience Country: {user_context.get('target_audience_country') or 'Not provided'}
+        - Additional Context: {user_context.get('additional_context') or 'Not provided'}
+"""
+
         # Variable data (changes per request) - this should NOT be cached
         sentiment_data_xml = f"""
         <sentiment_data>
@@ -4152,7 +4165,7 @@ class GPTInsightsService:
         - Neutral: {sentiment_distribution.get('Neutral', 0):.1f}%
         Average Sentiment Polarity: {avg_polarity:.3f}
         Average Subjectivity: {avg_subjectivity:.3f}
-
+        {user_context_section}
         Sample Reviews:
         {reviews_text}
         </sentiment_data>

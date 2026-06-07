@@ -105,22 +105,21 @@ class SentimentAnalyzer:
         
         edge_options.add_argument("--window-size=1920,1080")
         
-        try:            
-            service = Service(ChromeDriverManager().install())
-            driver = webdriver.Chrome(service=service, options=edge_options)
-            # Set page load timeout to prevent hanging
-            driver.set_page_load_timeout(60)
-            return driver
-        except Exception as e:
-            logging.error(f"Error with local driver: {e}")
-            logging.info("Falling back to system Chrome driver...")
+        # Try system chromedriver first (avoids version mismatch from webdriver_manager)
+        for attempt in ("system", "managed"):
             try:
-                driver = webdriver.Chrome(options=edge_options)
+                if attempt == "system":
+                    driver = webdriver.Chrome(options=edge_options)
+                else:
+                    logging.info("System chromedriver not found, downloading via webdriver_manager…")
+                    service = Service(ChromeDriverManager().install())
+                    driver = webdriver.Chrome(service=service, options=edge_options)
                 driver.set_page_load_timeout(60)
                 return driver
-            except Exception as fallback_error:
-                logging.error(f"System driver also failed: {fallback_error}")
-                raise Exception(f"Could not initialize Chrome WebDriver. Please ensure Chrome and chromedriver are properly installed. Local driver error: {e}, System driver error: {fallback_error}")
+            except Exception as e:
+                logging.warning(f"Chrome ({attempt}) failed: {e}, trying next…")
+
+        raise Exception("Could not initialize Chrome WebDriver. Ensure Chrome and chromedriver are installed.")
 
     def expand_review_if_needed(self, browser, review):
         btns = review.find_elements(By.CSS_SELECTOR, 'button.w8nwRe.kyuRq[aria-expanded="false"]')

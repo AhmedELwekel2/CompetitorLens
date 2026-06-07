@@ -180,6 +180,13 @@ export interface MarketAnalysisParams {
   country?: string;
   max_competitors?: number;
   reviews_per_competitor?: number;
+  company_name?: string;
+  business_description?: string;
+  main_goal?: string;
+  target_audience_country?: string;
+  additional_context?: string;
+  /** Client-generated job ID for persistence across refreshes */
+  job_id?: string;
 }
 
   export function runAiMarketAnalysis(
@@ -196,6 +203,12 @@ export interface MarketAnalysisParams {
         country: params.country || "Global",
         max_competitors: params.max_competitors,
         reviews_per_competitor: params.reviews_per_competitor,
+        company_name: params.company_name,
+        business_description: params.business_description,
+        main_goal: params.main_goal,
+        target_audience_country: params.target_audience_country,
+        additional_context: params.additional_context,
+        job_id: params.job_id,
       },
       onData,
       onError,
@@ -203,6 +216,69 @@ export interface MarketAnalysisParams {
       onProgress,
     );
   }
+
+// ─── Job Reconnect ───────────────────────────────────────────────────────────
+
+/**
+ * Reconnect to an in-progress or completed market analysis job.
+ * Replays all stored SSE events so the UI restores its state after a refresh or logout.
+ */
+export function reconnectToMarketJob(
+  jobId: string,
+  onData: (payload: MarketAnalysisPayload) => void,
+  onError: (err: string) => void,
+  onComplete: () => void,
+  onProgress?: (event: AnalysisProgressEvent) => void,
+): AbortController {
+  const controller = new AbortController();
+
+  fetch(`${AI_API_BASE}/job/${jobId}/stream`, {
+    method: "GET",
+    signal: controller.signal,
+  })
+    .then(async (res) => {
+      if (!res.ok) {
+        onError("job_not_found");
+        return;
+      }
+      const reader = res.body?.getReader();
+      if (!reader) { onError("No response body"); return; }
+
+      const decoder = new TextDecoder();
+      let buffer = "";
+      let hadError = false;
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split("\n");
+        buffer = lines.pop() || "";
+
+        for (const line of lines) {
+          if (line.startsWith(": ")) continue;
+          if (line.startsWith("data: ")) {
+            try {
+              const payload = JSON.parse(line.slice(6));
+              if (payload?._progress === true) {
+                if (onProgress) onProgress(payload as AnalysisProgressEvent);
+                continue;
+              }
+              if (payload?.error) { hadError = true; onError(payload.error); } else { onData(payload as MarketAnalysisPayload); }
+            } catch { /* skip malformed */ }
+          }
+        }
+      }
+      // Only signal completion if no error SSE was received — an error payload
+      // ends the stream but should not be treated as a successful completion.
+      if (!hadError) onComplete();
+    })
+    .catch((err) => {
+      if (err.name !== "AbortError") onError(err.message || "Reconnection failed");
+    });
+
+  return controller;
+}
 
 // ─── Single Business Analysis ────────────────────────────────────────────────
 

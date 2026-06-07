@@ -85,19 +85,26 @@ class TrustpilotScraper:
             }
             options.add_experimental_option("prefs", prefs)
 
-            try:
-                service = Service(ChromeDriverManager().install())
-                driver = webdriver.Chrome(service=service, options=options)
-                driver.execute_script(
-                    "Object.defineProperty(navigator,'webdriver',{get:()=>undefined})"
-                )
-                driver.set_page_load_timeout(60)
-                driver.implicitly_wait(3)
-                logging.info("TrustpilotScraper: Chrome WebDriver initialized")
-                return driver
-            except Exception as chrome_err:
-                logging.warning(f"Chrome failed: {chrome_err}, trying Edge…")
-                return self._setup_edge_fallback()
+            # Try system chromedriver first (avoids version mismatch from webdriver_manager)
+            for attempt in ("system", "managed"):
+                try:
+                    if attempt == "system":
+                        driver = webdriver.Chrome(options=options)
+                    else:
+                        logging.info("System chromedriver not found, downloading via webdriver_manager…")
+                        service = Service(ChromeDriverManager().install())
+                        driver = webdriver.Chrome(service=service, options=options)
+                    driver.execute_script(
+                        "Object.defineProperty(navigator,'webdriver',{get:()=>undefined})"
+                    )
+                    driver.set_page_load_timeout(60)
+                    driver.implicitly_wait(3)
+                    logging.info("TrustpilotScraper: Chrome WebDriver initialized")
+                    return driver
+                except Exception as e:
+                    logging.warning(f"Chrome ({attempt}) failed: {e}, trying next…")
+
+            raise Exception("All Chrome driver attempts failed")
 
         except Exception as exc:
             logging.error(f"Browser setup failed: {exc}")
@@ -379,6 +386,7 @@ class TrustpilotScraper:
         self,
         trustpilot_url: str,
         max_reviews: int = 200,
+        driver=None,
     ) -> Dict[str, Any]:
         """
         Scrape reviews from a Trustpilot business page.
@@ -387,6 +395,7 @@ class TrustpilotScraper:
             trustpilot_url: Full Trustpilot URL
                            (e.g. https://www.trustpilot.com/review/www.amazon.com)
             max_reviews:    Maximum number of reviews to scrape.
+            driver:         Optional existing WebDriver to reuse (caller is responsible for quitting it).
 
         Returns:
             Dict with keys:
@@ -394,9 +403,10 @@ class TrustpilotScraper:
                 reviews        – list of review dicts
                 dataframe      – pandas DataFrame (Name, Stars, Review Text, Date, Source URL)
         """
-        driver = None
+        _owned_driver = driver is None
         try:
-            driver = self.setup_browser()
+            if _owned_driver:
+                driver = self.setup_browser()
 
             # Normalize URL
             url = trustpilot_url.strip()
@@ -405,7 +415,15 @@ class TrustpilotScraper:
 
             logging.info(f"TrustpilotScraper: navigating to {url}")
             driver.get(url)
-            time.sleep(2)  # let JS hydrate
+
+            # Wait for review cards to appear instead of sleeping blindly
+            try:
+                WebDriverWait(driver, 10).until(
+                    EC.presence_of_element_located((By.CSS_SELECTOR,
+                        '[data-service-review-card], article, div[class*="paper_paper"]'))
+                )
+            except TimeoutException:
+                time.sleep(2)
 
             # Handle cookie / GDPR banners
             self._dismiss_cookie_banner(driver)
@@ -430,7 +448,7 @@ class TrustpilotScraper:
 
             reviews: List[Dict[str, Any]] = []
             scroll_attempts = 0
-            max_scroll_attempts = 40
+            max_scroll_attempts = 15
             last_count = 0
             stale_streak = 0
 
@@ -544,7 +562,7 @@ class TrustpilotScraper:
                 ),
             }
         finally:
-            if driver is not None:
+            if _owned_driver and driver is not None:
                 try:
                     driver.quit()
                 except Exception:
@@ -560,21 +578,16 @@ class TrustpilotScraper:
         selectors = [
             "button#onetrust-accept-btn-handler",
             "button[aria-label*='Accept']",
-            "button[aria-label*='accept']",
             "button[id*='accept']",
-            "button[class*='accept']",
-            "button[class*='cookie']",
-            "div[class*='cookie'] button",
-            "div[id*='cookie'] button",
         ]
         for sel in selectors:
             try:
-                btn = WebDriverWait(driver, 3).until(
+                btn = WebDriverWait(driver, 1).until(
                     EC.element_to_be_clickable((By.CSS_SELECTOR, sel))
                 )
                 driver.execute_script("arguments[0].click();", btn)
                 logging.info(f"Dismissed cookie banner via: {sel}")
-                time.sleep(1.5)
+                time.sleep(0.5)
                 return
             except (TimeoutException, NoSuchElementException):
                 continue
@@ -660,21 +673,23 @@ class TrustpilotScraper:
     # ------------------------------------------------------------------ #
     #  Convenience: search Trustpilot for a business name and return URL  #
     # ------------------------------------------------------------------ #
-    def search_business_url(self, business_name: str) -> Optional[str]:
+    def search_business_url(self, business_name: str, driver=None) -> Optional[str]:
         """
         Search Trustpilot for a business and return the first result's URL.
         Useful when the user doesn't know the exact Trustpilot slug.
+
+        Args:
+            driver: Optional existing WebDriver to reuse (caller is responsible for quitting it).
         """
-        driver = None
+        _owned_driver = driver is None
         try:
-            driver = self.setup_browser()
+            if _owned_driver:
+                driver = self.setup_browser()
             search_url = f"https://www.trustpilot.com/search?query={business_name.replace(' ', '%20')}"
             logging.info(f"TrustpilotScraper: searching for '{business_name}' at {search_url}")
             driver.get(search_url)
-            time.sleep(5)
 
             self._dismiss_cookie_banner(driver)
-            time.sleep(2)
 
             # Wait for search results to load
             try:
@@ -710,7 +725,7 @@ class TrustpilotScraper:
             logging.error(f"TrustpilotScraper search error: {exc}")
             return None
         finally:
-            if driver is not None:
+            if _owned_driver and driver is not None:
                 try:
                     driver.quit()
                 except Exception:

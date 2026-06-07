@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import TopBar from "@/components/TopBar";
 import {
   Zap,
@@ -19,6 +19,9 @@ import {
   ExternalLink,
   ShieldCheck,
   MessageSquare,
+  ArrowLeft,
+  ArrowRight,
+  X,
 } from "lucide-react";
 import { useAnalysis } from "@/lib/analysis-context";
 import MarkdownRenderer from "@/components/MarkdownRenderer";
@@ -27,9 +30,48 @@ function Card({ children, className = "" }: { children: React.ReactNode; classNa
   return <div className={`bg-bg-card rounded-xl border border-border ${className}`}>{children}</div>;
 }
 
+const WIZARD_STEPS = 5;
+
+const STEP_MESSAGES: Record<number, string> = {
+  2: "Great start! You're building something amazing",
+  3: "Halfway there! Your insights are taking shape",
+  4: "Halfway there! Your insights are taking shape",
+  5: "Almost done! Last step before your insights",
+};
+
+const MARKET_JOB_KEY = "cl_market_job";
+const JOB_TTL_MS = 7200_000;
+
+function hasPendingJob(): boolean {
+  if (typeof window === "undefined") return false;
+  try {
+    const raw = localStorage.getItem(MARKET_JOB_KEY);
+    if (!raw) return false;
+    const { jobId, startedAt } = JSON.parse(raw) as { jobId?: string; startedAt?: number };
+    return Boolean(jobId) && Date.now() - (startedAt ?? 0) < JOB_TTL_MS;
+  } catch {
+    return false;
+  }
+}
+
 export default function MarketAnalysisPage() {
   const [industry, setIndustry] = useState("");
   const [country, setCountry] = useState("");
+  // Lazy initializer reads localStorage synchronously on the client.
+  // Returns false on the server (no window) — same pattern as _readStoredJob.
+  // React handles the SSR/client mismatch by re-rendering with the client value.
+  const [pendingReconnect, setPendingReconnect] = useState<boolean>(() => hasPendingJob());
+
+  // Wizard state
+  const [wizardOpen, setWizardOpen] = useState(false);
+  const [wizardStep, setWizardStep] = useState(1);
+  const [wizardError, setWizardError] = useState("");
+  const [companyName, setCompanyName] = useState("");
+  const [businessDescription, setBusinessDescription] = useState("");
+  const [mainGoal, setMainGoal] = useState("");
+  const [targetAudienceCountry, setTargetAudienceCountry] = useState("");
+  const [additionalContext, setAdditionalContext] = useState("");
+
   const { market, startMarketAnalysis, cancelAnalysis, resetAnalysis } = useAnalysis();
 
   const loading = market.loading;
@@ -37,19 +79,79 @@ export default function MarketAnalysisPage() {
   const data = market.data;
   const completed = market.completed;
 
-  const handleRun = () => {
+  // Once the context reconnect starts (loading=true) or a final state is
+  // reached, pendingReconnect is no longer needed.
+  useEffect(() => {
+    if (loading || completed || data || error) setPendingReconnect(false);
+  }, [loading, completed, data, error]);
+
+  const showSpinner = (loading || pendingReconnect) && !data?.competitorsAnalyzed?.length;
+
+  const openWizard = () => {
     if (!industry.trim()) return;
+    setWizardStep(1);
+    setWizardError("");
+    setWizardOpen(true);
+  };
+
+  const closeWizard = () => {
+    setWizardOpen(false);
+    setWizardError("");
+  };
+
+  const wizardCurrentValue = () => {
+    switch (wizardStep) {
+      case 1: return companyName;
+      case 2: return businessDescription;
+      case 3: return mainGoal;
+      case 4: return targetAudienceCountry;
+      default: return additionalContext;
+    }
+  };
+
+  const isStepRequired = wizardStep < 5;
+
+  const handleWizardNext = () => {
+    setWizardError("");
+    if (isStepRequired && !wizardCurrentValue().trim()) {
+      setWizardError("This field is required.");
+      return;
+    }
+    if (wizardStep < WIZARD_STEPS) {
+      setWizardStep((s) => s + 1);
+    } else {
+      handleRunWithContext();
+    }
+  };
+
+  const handleWizardBack = () => {
+    setWizardError("");
+    if (wizardStep === 1) {
+      closeWizard();
+    } else {
+      setWizardStep((s) => s - 1);
+    }
+  };
+
+  const handleRunWithContext = () => {
+    closeWizard();
     const countryLabel = country.trim() || "Global";
     startMarketAnalysis(
       {
         industry: industry.trim(),
         country: countryLabel,
+        company_name: companyName.trim() || undefined,
+        business_description: businessDescription.trim() || undefined,
+        main_goal: mainGoal.trim() || undefined,
+        target_audience_country: targetAudienceCountry.trim() || undefined,
+        additional_context: additionalContext.trim() || undefined,
       },
       { countryLabel }
     );
   };
 
   const handleCancel = () => {
+    setPendingReconnect(false);
     cancelAnalysis("MARKET");
   };
 
@@ -86,9 +188,9 @@ export default function MarketAnalysisPage() {
                 placeholder="e.g. Fintech, Sustainable Fashion, SaaS"
                 value={industry}
                 onChange={(e) => setIndustry(e.target.value)}
-                onKeyDown={(e) => e.key === "Enter" && handleRun()}
+                onKeyDown={(e) => e.key === "Enter" && openWizard()}
                 className="w-full pl-10 pr-4 py-3 text-[13.5px] rounded-lg border border-border bg-white placeholder:text-text-muted focus:outline-none focus:ring-2 focus:ring-primary/15 focus:border-primary/40"
-                disabled={loading}
+                disabled={loading || pendingReconnect}
               />
             </div>
           </div>
@@ -104,14 +206,14 @@ export default function MarketAnalysisPage() {
                 placeholder="e.g. Global, United Kingdom, Egypt"
                 value={country}
                 onChange={(e) => setCountry(e.target.value)}
-                onKeyDown={(e) => e.key === "Enter" && handleRun()}
-                disabled={loading}
+                onKeyDown={(e) => e.key === "Enter" && openWizard()}
+                disabled={loading || pendingReconnect}
                 className="w-full pl-10 pr-4 py-3 text-[13.5px] rounded-lg border border-border bg-white placeholder:text-text-muted focus:outline-none focus:ring-2 focus:ring-primary/15 focus:border-primary/40"
               />
             </div>
           </div>
 
-          {loading ? (
+          {loading || pendingReconnect ? (
             <button
               onClick={handleCancel}
               className="w-full md:w-auto px-8 py-3 rounded-lg bg-negative text-white text-sm font-semibold hover:bg-red-600 transition-colors flex items-center justify-center gap-2 flex-shrink-0"
@@ -127,7 +229,7 @@ export default function MarketAnalysisPage() {
             </button>
           ) : (
             <button
-              onClick={handleRun}
+              onClick={openWizard}
               disabled={!industry.trim()}
               className="w-full md:w-auto px-8 py-3 rounded-lg bg-primary text-white text-sm font-semibold hover:bg-primary-hover transition-colors flex items-center justify-center gap-2 flex-shrink-0 disabled:opacity-50 disabled:cursor-not-allowed"
             >
@@ -148,17 +250,21 @@ export default function MarketAnalysisPage() {
       )}
 
       {/* Loading state */}
-      {loading && !hasResults && (
+      {showSpinner && (
         <Card className="p-8 mb-6">
           <div className="flex flex-col items-center text-center py-8">
             <Loader2 size={40} className="text-primary animate-spin mb-4" />
-            <h2 className="text-lg font-bold text-text-heading mb-2">Analyzing {industry}...</h2>
+            <h2 className="text-lg font-bold text-text-heading mb-2">
+              {industry ? `Analyzing ${industry}...` : "Reconnecting to analysis..."}
+            </h2>
             <p className="text-sm text-text-secondary max-w-md">
               {market.progressMessage
                 ? market.progressMessage
-                : data?.analysisTitle
-                  ? `Processing: ${data.analysisTitle}`
-                  : "Scanning competitive landscapes, pricing models, and sentiment trends..."}
+                : pendingReconnect
+                  ? "Restoring your analysis session..."
+                  : data?.analysisTitle
+                    ? `Processing: ${data.analysisTitle}`
+                    : "Scanning competitive landscapes, pricing models, and sentiment trends..."}
             </p>
           </div>
         </Card>
@@ -460,8 +566,151 @@ export default function MarketAnalysisPage() {
         </>
       )}
 
-      {/* Empty state (no results, not loading) */}
-      {!hasResults && !loading && !error && (
+      {/* Wizard Modal */}
+      {wizardOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
+          <div className="bg-bg-card rounded-2xl border border-border w-full max-w-lg shadow-2xl">
+            {/* Header */}
+            <div className="flex items-center justify-between px-7 pt-7 pb-4">
+              <h2 className="text-xl font-bold text-primary">Market Analysis Setup</h2>
+              <button onClick={closeWizard} className="text-text-muted hover:text-text-heading transition-colors">
+                <X size={20} />
+              </button>
+            </div>
+
+            {/* Progress */}
+            <div className="px-7 pb-5">
+              <div className="flex items-center justify-between mb-2">
+                <span className="text-[11px] font-semibold uppercase tracking-wider text-text-muted">Progress</span>
+                <span className="text-[11px] font-semibold text-text-muted">Step {wizardStep} of {WIZARD_STEPS}</span>
+              </div>
+              <div className="h-2 rounded-full bg-bg-main overflow-hidden">
+                <div
+                  className="h-full rounded-full bg-gradient-to-r from-primary to-purple-500 transition-all duration-300"
+                  style={{ width: `${(wizardStep / WIZARD_STEPS) * 100}%` }}
+                />
+              </div>
+              {STEP_MESSAGES[wizardStep] && (
+                <div className="mt-3 px-4 py-2 rounded-lg bg-primary/10 border border-primary/20 text-center">
+                  <span className="text-xs font-medium text-primary">{STEP_MESSAGES[wizardStep]}</span>
+                </div>
+              )}
+            </div>
+
+            {/* Step content */}
+            <div className="px-7 pb-6">
+              {wizardStep === 1 && (
+                <div>
+                  <label className="block text-sm font-semibold text-text-heading mb-1">Company Name</label>
+                  <p className="text-xs text-text-muted mb-3">
+                    {wizardError ? <span className="text-negative">{wizardError}</span> : "This field is required."}
+                  </p>
+                  <input
+                    autoFocus
+                    type="text"
+                    placeholder="e.g., Transformix Inc."
+                    value={companyName}
+                    onChange={(e) => { setCompanyName(e.target.value); setWizardError(""); }}
+                    onKeyDown={(e) => e.key === "Enter" && handleWizardNext()}
+                    className="w-full px-4 py-3 text-[13.5px] rounded-lg border border-border bg-bg-main placeholder:text-text-muted focus:outline-none focus:ring-2 focus:ring-primary/15 focus:border-primary/40"
+                  />
+                </div>
+              )}
+
+              {wizardStep === 2 && (
+                <div>
+                  <label className="block text-sm font-semibold text-text-heading mb-1">Business Description <span className="text-text-muted font-normal">(for a 6th grader)</span></label>
+                  <p className="text-xs text-text-muted mb-3">
+                    {wizardError ? <span className="text-negative">{wizardError}</span> : "This field is required."}
+                  </p>
+                  <textarea
+                    autoFocus
+                    rows={4}
+                    placeholder="e.g., We help businesses grow online!"
+                    value={businessDescription}
+                    onChange={(e) => { setBusinessDescription(e.target.value); setWizardError(""); }}
+                    className="w-full px-4 py-3 text-[13.5px] rounded-lg border border-border bg-bg-main placeholder:text-text-muted focus:outline-none focus:ring-2 focus:ring-primary/15 focus:border-primary/40 resize-none"
+                  />
+                </div>
+              )}
+
+              {wizardStep === 3 && (
+                <div>
+                  <label className="block text-sm font-semibold text-text-heading mb-1">Main Goal for this Analysis</label>
+                  <p className="text-xs text-text-muted mb-3">
+                    {wizardError ? <span className="text-negative">{wizardError}</span> : "This field is required."}
+                  </p>
+                  <input
+                    autoFocus
+                    type="text"
+                    placeholder="e.g., Increase engagement"
+                    value={mainGoal}
+                    onChange={(e) => { setMainGoal(e.target.value); setWizardError(""); }}
+                    onKeyDown={(e) => e.key === "Enter" && handleWizardNext()}
+                    className="w-full px-4 py-3 text-[13.5px] rounded-lg border border-border bg-bg-main placeholder:text-text-muted focus:outline-none focus:ring-2 focus:ring-primary/15 focus:border-primary/40"
+                  />
+                </div>
+              )}
+
+              {wizardStep === 4 && (
+                <div>
+                  <label className="block text-sm font-semibold text-text-heading mb-1">Primary Target Audience Country</label>
+                  <p className="text-xs text-text-muted mb-3">
+                    {wizardError ? <span className="text-negative">{wizardError}</span> : "This field is required."}
+                  </p>
+                  <input
+                    autoFocus
+                    type="text"
+                    placeholder="e.g., Saudi Arabia"
+                    value={targetAudienceCountry}
+                    onChange={(e) => { setTargetAudienceCountry(e.target.value); setWizardError(""); }}
+                    onKeyDown={(e) => e.key === "Enter" && handleWizardNext()}
+                    className="w-full px-4 py-3 text-[13.5px] rounded-lg border border-border bg-bg-main placeholder:text-text-muted focus:outline-none focus:ring-2 focus:ring-primary/15 focus:border-primary/40"
+                  />
+                </div>
+              )}
+
+              {wizardStep === 5 && (
+                <div>
+                  <label className="block text-sm font-semibold text-text-heading mb-1">Additional Context <span className="text-text-muted font-normal">(optional)</span></label>
+                  <p className="text-xs text-text-muted mb-3">Any extra details to tailor the analysis.</p>
+                  <textarea
+                    autoFocus
+                    rows={4}
+                    placeholder="e.g., We currently focus on B2B clients in the healthcare sector..."
+                    value={additionalContext}
+                    onChange={(e) => setAdditionalContext(e.target.value)}
+                    className="w-full px-4 py-3 text-[13.5px] rounded-lg border border-border bg-bg-main placeholder:text-text-muted focus:outline-none focus:ring-2 focus:ring-primary/15 focus:border-primary/40 resize-none"
+                  />
+                </div>
+              )}
+            </div>
+
+            {/* Navigation */}
+            <div className="flex items-center justify-between px-7 pb-7">
+              <button
+                onClick={handleWizardBack}
+                className="flex items-center gap-2 px-5 py-2.5 rounded-lg border border-border text-sm font-semibold text-text-secondary hover:bg-bg-main transition-colors"
+              >
+                <ArrowLeft size={15} /> Back
+              </button>
+              <button
+                onClick={handleWizardNext}
+                className="flex items-center gap-2 px-6 py-2.5 rounded-lg bg-primary text-white text-sm font-semibold hover:bg-primary-hover transition-colors"
+              >
+                {wizardStep === WIZARD_STEPS ? (
+                  <><Zap size={15} /> Run Analysis</>
+                ) : (
+                  <><ArrowRight size={15} /> Continue</>
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Empty state (no results, not loading, no pending reconnect) */}
+      {!hasResults && !showSpinner && !error && (
         <>
           <Card className="p-8 mb-6 border-dashed border-2 border-border">
             <div className="flex flex-col items-center text-center py-12">

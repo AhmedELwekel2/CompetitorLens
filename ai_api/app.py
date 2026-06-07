@@ -4,6 +4,7 @@ import logging
 import threading
 import queue
 import time
+import uuid
 from typing import Any, Dict
 from flask import Flask, request, jsonify, Response, stream_with_context
 from flask_cors import CORS
@@ -15,6 +16,120 @@ CORS(app, resources={r"/*": {"origins": "*"}})
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+
+# ── Job store ─────────────────────────────────────────────────────────────────
+# Keeps every SSE line for each running/completed job so clients can reconnect
+# after a page refresh or logout without losing progress or results.
+# Jobs are kept for JOB_TTL_SECONDS then evicted on the next job creation.
+
+_JOB_STORE: Dict[str, Any] = {}
+_JOB_LOCK = threading.Lock()
+_JOB_TTL_SECONDS = 7200  # 2 hours
+
+
+def _job_create(job_id: str) -> None:
+    with _JOB_LOCK:
+        _JOB_STORE[job_id] = {
+            "status": "running",
+            "stored_lines": [],
+            "subscribers": [],
+            "created_at": time.time(),
+            "lock": threading.Lock(),
+        }
+        # Evict expired jobs
+        expired = [
+            jid for jid, j in _JOB_STORE.items()
+            if time.time() - j["created_at"] > _JOB_TTL_SECONDS and jid != job_id
+        ]
+        for jid in expired:
+            del _JOB_STORE[jid]
+
+
+def _job_publish(job_id: str, sse_line: str) -> None:
+    job = _JOB_STORE.get(job_id)
+    if not job:
+        return
+    with job["lock"]:
+        job["stored_lines"].append(sse_line)
+        for q in list(job["subscribers"]):
+            try:
+                q.put_nowait(sse_line)
+            except Exception:
+                pass
+
+
+def _job_finish(job_id: str, status: str = "complete") -> None:
+    job = _JOB_STORE.get(job_id)
+    if not job:
+        return
+    with job["lock"]:
+        job["status"] = status
+        for q in list(job["subscribers"]):
+            try:
+                q.put_nowait(None)  # sentinel: stream is done
+            except Exception:
+                pass
+        job["subscribers"].clear()
+
+
+def _job_subscribe(job_id: str):
+    """
+    Returns (stored_lines_snapshot, live_queue) or None if not found.
+    live_queue is None when the job is already complete — just replay snapshot.
+    """
+    job = _JOB_STORE.get(job_id)
+    if not job:
+        return None
+    with job["lock"]:
+        snapshot = list(job["stored_lines"])
+        if job["status"] != "running":
+            return (snapshot, None)
+        q: queue.Queue = queue.Queue()
+        job["subscribers"].append(q)
+        return (snapshot, q)
+
+
+def _job_unsubscribe(job_id: str, q) -> None:
+    job = _JOB_STORE.get(job_id)
+    if not job:
+        return
+    with job["lock"]:
+        try:
+            job["subscribers"].remove(q)
+        except ValueError:
+            pass
+
+
+def _job_sse_stream(job_id: str):
+    """
+    Subscribe to a job and stream all SSE lines to the current client.
+    Replays stored events then follows live events until the job finishes.
+    Safe to call on every connect/reconnect — client disconnect does NOT
+    affect the background publisher thread or the job store.
+    """
+    result = _job_subscribe(job_id)
+    if not result:
+        yield "data: " + json.dumps({"error": "Job not found or expired"}) + "\n\n"
+        return
+    stored_lines, live_q = result
+    try:
+        for line in stored_lines:
+            yield line
+        if live_q is None:
+            return  # job already finished — stored lines are all we need
+        while True:
+            try:
+                line = live_q.get(timeout=30)
+            except queue.Empty:
+                yield _sse_keepalive()
+                continue
+            if line is None:  # sentinel: publisher finished the job
+                break
+            yield line
+    finally:
+        if live_q is not None:
+            _job_unsubscribe(job_id, live_q)
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -63,8 +178,19 @@ def customer_sentiment_analysis():
         if not industry or not country:
             return jsonify({"error": "industry_field and country are required"}), 400
 
+        company_name = (body.get("company_name") or "").strip() or None
+        business_description = (body.get("business_description") or "").strip() or None
+        main_goal = (body.get("main_goal") or "").strip() or None
+        target_audience_country = (body.get("target_audience_country") or "").strip() or None
+        additional_context = (body.get("additional_context") or "").strip() or None
+
         MAX_COMPETITORS = 5
         REVIEWS_PER_COMPETITOR = 100
+
+        # Use the client-supplied job_id (generated before the request) so that
+        # localStorage is already populated when the user refreshes mid-analysis.
+        job_id = (body.get("job_id") or "").strip() or str(uuid.uuid4())
+        _job_create(job_id)
 
         def stream_response():
             progress_q = queue.Queue()
@@ -189,6 +315,13 @@ def customer_sentiment_analysis():
                                     "name": comp.get("name", "Unknown"),
                                     "rating": comp.get("rating", 0),
                                     "review_count": comp.get("review_count", 0),
+                                },
+                                "user_context": {
+                                    "company_name": company_name,
+                                    "business_description": business_description,
+                                    "main_goal": main_goal,
+                                    "target_audience_country": target_audience_country,
+                                    "additional_context": additional_context,
                                 },
                             }
                             # Need event loop for async GPT call
@@ -452,8 +585,26 @@ def customer_sentiment_analysis():
             payload["allTokensUsed"] = total_tokens
             yield "data: " + json.dumps(payload) + '\n\n'
 
+        def _publisher_fn():
+            """
+            Consume stream_response() in a dedicated thread and publish every SSE
+            line to the job store.  Runs independently of any client connection —
+            page refreshes / logouts cannot kill this thread or corrupt the job.
+            """
+            try:
+                for line in stream_response():
+                    if not line.startswith(": "):  # skip keepalive comments
+                        _job_publish(job_id, line)
+            except Exception as exc:
+                err_line = "data: " + json.dumps({"error": str(exc)}) + "\n\n"
+                _job_publish(job_id, err_line)
+            finally:
+                _job_finish(job_id)
+
+        threading.Thread(target=_publisher_fn, daemon=True).start()
+
         response = Response(
-            stream_with_context(stream_response()),
+            stream_with_context(_job_sse_stream(job_id)),
             mimetype="text/event-stream",
         )
         response.headers["Cache-Control"] = "no-cache, no-transform"
@@ -701,6 +852,28 @@ def business_sentiment_analysis():
 
     except Exception as e:
         return jsonify({"error": f"Failed to process request: {str(e)}"}), 500
+
+
+# ── GET /ai/job/<job_id>/stream  (reconnect endpoint) ────────────────────────
+
+@app.get("/ai/job/<job_id>/stream")
+def job_reconnect_stream(job_id: str):
+    """
+    Reconnect to a running or completed analysis job.
+    Uses the shared _job_sse_stream helper — same logic as the initial connection.
+    Returns 404 if the job_id is unknown or has expired.
+    """
+    if _JOB_STORE.get(job_id) is None:
+        return jsonify({"error": "Job not found or expired"}), 404
+
+    response = Response(
+        stream_with_context(_job_sse_stream(job_id)),
+        mimetype="text/event-stream",
+    )
+    response.headers["Cache-Control"] = "no-cache, no-transform"
+    response.headers["X-Accel-Buffering"] = "no"
+    response.headers["Connection"] = "keep-alive"
+    return response
 
 
 # ── Health check ───────────────────────────────────────────────────────────────

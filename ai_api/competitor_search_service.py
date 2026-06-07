@@ -11,6 +11,7 @@ import logging
 import os
 import re
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any, Dict, List, Optional
 
 from selenium import webdriver
@@ -68,16 +69,21 @@ class CompetitorSearchService:
         }
         options.add_experimental_option("prefs", prefs)
 
-        try:
-            service = Service(ChromeDriverManager().install())
-            driver = webdriver.Chrome(service=service, options=options)
-            driver.set_page_load_timeout(60)
-            return driver
-        except Exception as e:
-            logging.warning(f"Chrome driver install failed: {e}, trying system driver...")
-            driver = webdriver.Chrome(options=options)
-            driver.set_page_load_timeout(60)
-            return driver
+        # Try system chromedriver first (avoids version mismatch from webdriver_manager)
+        for attempt in ("system", "managed"):
+            try:
+                if attempt == "system":
+                    driver = webdriver.Chrome(options=options)
+                else:
+                    logging.info("System chromedriver not found, downloading via webdriver_manager…")
+                    service = Service(ChromeDriverManager().install())
+                    driver = webdriver.Chrome(service=service, options=options)
+                driver.set_page_load_timeout(60)
+                return driver
+            except Exception as e:
+                logging.warning(f"Chrome ({attempt}) failed: {e}, trying next…")
+
+        raise Exception("All Chrome driver attempts failed")
 
     # ------------------------------------------------------------------ #
     #  Search Google Maps for competitors                                  #
@@ -309,6 +315,42 @@ class CompetitorSearchService:
         return reviews
 
     # ------------------------------------------------------------------ #
+    #  Trustpilot enrichment for a single competitor (own browser)         #
+    # ------------------------------------------------------------------ #
+    def _enrich_single_competitor_trustpilot(self, comp: Dict, max_reviews: int) -> Dict:
+        """Run Trustpilot search + scrape for one competitor using its own browser."""
+        tp_driver = None
+        try:
+            tp_driver = self.trustpilot_scraper.setup_browser()
+            tp_url = self.trustpilot_scraper.search_business_url(comp["name"], driver=tp_driver)
+            comp["trustpilot_url"] = tp_url
+            if tp_url:
+                tp_result = self.trustpilot_scraper.scrape_trustpilot_reviews(
+                    tp_url, max_reviews=max_reviews, driver=tp_driver
+                )
+                comp["trustpilot_business_info"] = tp_result.get("business_info", {})
+                comp["trustpilot_reviews"] = [
+                    {"review_text": r.get("review_text", "")}
+                    for r in tp_result.get("reviews", [])
+                    if r.get("review_text")
+                ]
+            else:
+                comp["trustpilot_business_info"] = None
+                comp["trustpilot_reviews"] = []
+        except Exception as e:
+            logging.warning(f"Trustpilot enrichment failed for {comp['name']}: {e}")
+            comp["trustpilot_url"] = None
+            comp["trustpilot_business_info"] = None
+            comp["trustpilot_reviews"] = []
+        finally:
+            if tp_driver is not None:
+                try:
+                    tp_driver.quit()
+                except Exception:
+                    pass
+        return comp
+
+    # ------------------------------------------------------------------ #
     #  Main pipeline: search_competitors_with_trustpilot                   #
     # ------------------------------------------------------------------ #
     async def search_competitors_with_trustpilot(
@@ -372,42 +414,35 @@ class CompetitorSearchService:
                     logging.warning(f"Error scraping reviews for {comp['name']}: {e}")
                     comp["google_maps_reviews"] = []
 
-            # Step 3: Try Trustpilot enrichment for each competitor
-            for i, comp in enumerate(competitors):
-                if progress_callback:
-                    progress_callback(
-                        "searching_trustpilot",
-                        f"Searching Trustpilot for {comp['name']} ({i+1}/{len(competitors)})",
-                        {"current": i+1, "total": len(competitors), "name": comp["name"]},
-                    )
-                try:
-                    tp_url = self.trustpilot_scraper.search_business_url(comp["name"])
-                    comp["trustpilot_url"] = tp_url
+            # Step 3: Trustpilot enrichment — all competitors in parallel (max 3 browsers at once)
+            if progress_callback:
+                progress_callback(
+                    "searching_trustpilot",
+                    f"Enriching {len(competitors)} competitors with Trustpilot data in parallel...",
+                    {"total": len(competitors)},
+                )
 
-                    if tp_url:
+            max_workers = min(3, len(competitors))
+            with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                future_to_comp = {
+                    executor.submit(
+                        self._enrich_single_competitor_trustpilot,
+                        comp,
+                        max_reviews_per_competitor,
+                    ): comp
+                    for comp in competitors
+                }
+                for future in as_completed(future_to_comp):
+                    try:
+                        enriched = future.result()
                         if progress_callback:
                             progress_callback(
-                                "scraping_trustpilot",
-                                f"Scraping Trustpilot reviews for {comp['name']} ({i+1}/{len(competitors)})",
-                                {"current": i+1, "total": len(competitors), "name": comp["name"]},
+                                "trustpilot_done",
+                                f"Trustpilot done for {enriched['name']}",
+                                {"name": enriched["name"]},
                             )
-                        tp_result = self.trustpilot_scraper.scrape_trustpilot_reviews(
-                            tp_url, max_reviews=max_reviews_per_competitor
-                        )
-                        comp["trustpilot_business_info"] = tp_result.get("business_info", {})
-                        comp["trustpilot_reviews"] = [
-                            {"review_text": r.get("review_text", "")}
-                            for r in tp_result.get("reviews", [])
-                            if r.get("review_text")
-                        ]
-                    else:
-                        comp["trustpilot_business_info"] = None
-                        comp["trustpilot_reviews"] = []
-                except Exception as e:
-                    logging.warning(f"Trustpilot enrichment failed for {comp['name']}: {e}")
-                    comp["trustpilot_url"] = None
-                    comp["trustpilot_business_info"] = None
-                    comp["trustpilot_reviews"] = []
+                    except Exception as e:
+                        logging.warning(f"Trustpilot parallel future error: {e}")
 
             if progress_callback:
                 progress_callback("scraping_complete", f"Data collection complete for {len(competitors)} competitors", {"count": len(competitors)})
