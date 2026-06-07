@@ -246,7 +246,7 @@ export default function AdminDashboardPage() {
       )}
 
       {/* Filters */}
-      <div className="bg-white rounded-xl border border-border p-5">
+      <div className="bg-white rounded-2xl border border-border shadow-card p-5">
         <form onSubmit={handleSearch} className="flex flex-wrap gap-3 items-center mb-4">
           <div className="flex-1 min-w-[200px] relative">
             <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-text-muted" />
@@ -438,7 +438,7 @@ export default function AdminDashboardPage() {
       {/* User Detail Modal */}
       {selectedUserId && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40" onClick={() => setSelectedUserId(null)}>
-          <div className="bg-white rounded-xl border border-border shadow-2xl w-full max-w-2xl max-h-[85vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
+          <div className="bg-white rounded-2xl border border-border shadow-2xl w-full max-w-2xl max-h-[85vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
             {detailLoading ? (
               <div className="flex items-center justify-center py-16">
                 <Loader2 className="animate-spin text-primary" size={28} />
@@ -570,8 +570,8 @@ function StatCard({
   isText?: boolean;
 }) {
   return (
-    <div className="bg-white rounded-xl border border-border p-4 flex items-center gap-3">
-      <div className={`w-10 h-10 rounded-lg ${bg} flex items-center justify-center`}>
+    <div className="bg-white rounded-2xl border border-border shadow-card p-4 flex items-center gap-3 transition-shadow hover:shadow-pop">
+      <div className={`w-10 h-10 rounded-xl ${bg} flex items-center justify-center`}>
         <Icon size={18} className={color} />
       </div>
       <div>

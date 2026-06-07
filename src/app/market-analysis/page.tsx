@@ -27,7 +27,7 @@ import { useAnalysis } from "@/lib/analysis-context";
 import MarkdownRenderer from "@/components/MarkdownRenderer";
 
 function Card({ children, className = "" }: { children: React.ReactNode; className?: string }) {
-  return <div className={`bg-bg-card rounded-xl border border-border ${className}`}>{children}</div>;
+  return <div className={`bg-bg-card rounded-2xl border border-border shadow-card ${className}`}>{children}</div>;
 }
 
 const WIZARD_STEPS = 5;

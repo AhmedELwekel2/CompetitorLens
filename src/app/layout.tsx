@@ -7,7 +7,7 @@ import { AnalysisProvider } from "@/lib/analysis-context";
 import { AuthGuard } from "@/components/AuthGuard";
 
 export const metadata: Metadata = {
-  title: "CompetitorLens — Trusted Advisor Intelligence",
+  title: "sx — Trusted Advisor Intelligence",
   description: "AI-powered competitive intelligence and market sentiment analysis",
 };
 
@@ -21,7 +21,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
               <Sidebar />
               <NotificationToast />
               <main className="flex-1 min-w-0 overflow-y-auto">
-                <div className="p-5 lg:p-8 max-w-[1440px]">
+                <div className="p-5 lg:p-8 max-w-[1440px] animate-fade-in-up">
                   {children}
                 </div>
               </main>

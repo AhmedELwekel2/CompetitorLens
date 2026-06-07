@@ -29,7 +29,7 @@ import {
 } from "@/lib/api";
 
 function Card({ children, className = "" }: { children: React.ReactNode; className?: string }) {
-  return <div className={`bg-bg-card rounded-xl border border-border ${className}`}>{children}</div>;
+  return <div className={`bg-bg-card rounded-2xl border border-border shadow-card ${className}`}>{children}</div>;
 }
 
 const typeIcons: Record<string, typeof BarChart3> = {

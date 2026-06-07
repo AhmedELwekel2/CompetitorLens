@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { TrendingUp, Loader2 } from "lucide-react";
+import { Sparkles, Loader2 } from "lucide-react";
 import { useAuth } from "@/lib/auth";
 
 export default function LoginPage() {
@@ -39,16 +39,34 @@ export default function LoginPage() {
       <div className="w-full max-w-md">
         {/* Logo */}
         <div className="flex items-center gap-2.5 justify-center mb-8">
-          <div className="w-10 h-10 rounded-lg bg-sidebar flex items-center justify-center">
-            <TrendingUp size={22} className="text-accent-green" />
+          <div
+            className="w-10 h-10 rounded-xl flex items-center justify-center shadow-lg"
+            style={{
+              background: "linear-gradient(135deg, #8B5CF6 0%, #6D28D9 50%, #2DD4A8 130%)",
+              boxShadow: "0 6px 16px -4px rgba(139,92,246,0.45)",
+            }}
+          >
+            <Sparkles size={22} className="text-white" strokeWidth={2.2} />
           </div>
           <div>
-            <h1 className="text-xl font-bold text-text-heading leading-tight">CompetitorLens</h1>
-            <p className="text-accent-green text-[10px] font-semibold uppercase tracking-[0.12em]">Trusted Advisor</p>
+            <h1
+              className="font-bold text-[22px] leading-none tracking-tight"
+              style={{
+                background: "linear-gradient(90deg, #6D28D9 0%, #8B5CF6 55%, #2DD4A8 100%)",
+                WebkitBackgroundClip: "text",
+                WebkitTextFillColor: "transparent",
+                backgroundClip: "text",
+              }}
+            >
+              sx
+            </h1>
+            <p className="text-text-muted text-[9.5px] font-semibold uppercase tracking-[0.18em] mt-0.5">
+              Trusted Advisor
+            </p>
           </div>
         </div>
 
-        <div className="bg-white rounded-xl border border-border p-8">
+        <div className="bg-white rounded-2xl border border-border shadow-card p-8">
           <h2 className="text-xl font-bold text-text-heading mb-1">
             {mode === "login" ? "Welcome back" : "Create your account"}
           </h2>

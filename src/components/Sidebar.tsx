@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
+  Sparkles,
   TrendingUp,
   Building2,
   Clock,
@@ -70,13 +71,16 @@ export default function Sidebar() {
       {/* Sidebar */}
       <aside
         className={`
-          fixed top-0 left-0 h-full z-50 w-[260px] bg-sidebar flex flex-col
+          fixed top-0 left-0 h-full z-50 w-[260px] flex flex-col
           transition-transform duration-300 ease-in-out
           lg:translate-x-0 lg:static lg:z-auto
           lg:h-screen lg:sticky lg:top-0
           ${open ? "translate-x-0" : "-translate-x-full"}
         `}
-        style={{ boxShadow: "2px 0 12px rgba(0,0,0,0.08)" }}
+        style={{
+          background: "linear-gradient(180deg, #211D54 0%, #1E1B4B 55%, #181542 100%)",
+          boxShadow: "1px 0 0 rgba(255,255,255,0.04), 8px 0 30px -12px rgba(30,27,75,0.45)",
+        }}
       >
         {/* Close button mobile */}
         <button
@@ -89,15 +93,29 @@ export default function Sidebar() {
 
         {/* Logo */}
         <div className="px-5 pt-6 pb-8">
-          <div className="flex items-center gap-2.5">
-            <div className="w-8 h-8 rounded-lg bg-accent-green/20 flex items-center justify-center">
-              <TrendingUp size={18} className="text-accent-green" />
+          <div className="flex items-center gap-3">
+            <div
+              className="w-9 h-9 rounded-xl flex items-center justify-center shadow-lg"
+              style={{
+                background: "linear-gradient(135deg, #8B5CF6 0%, #6D28D9 50%, #2DD4A8 130%)",
+                boxShadow: "0 6px 16px -4px rgba(139,92,246,0.55)",
+              }}
+            >
+              <Sparkles size={18} className="text-white" strokeWidth={2.2} />
             </div>
             <div>
-              <h1 className="text-white font-bold text-[15px] leading-tight tracking-tight">
-                CompetitorLens
+              <h1
+                className="font-bold text-[18px] leading-none tracking-tight"
+                style={{
+                  background: "linear-gradient(90deg, #fff 0%, #a78bfa 60%, #2DD4A8 100%)",
+                  WebkitBackgroundClip: "text",
+                  WebkitTextFillColor: "transparent",
+                  backgroundClip: "text",
+                }}
+              >
+                sx
               </h1>
-              <p className="text-accent-green text-[10px] font-semibold uppercase tracking-[0.12em]">
+              <p className="text-white/40 text-[9.5px] font-semibold uppercase tracking-[0.18em] mt-0.5">
                 Trusted Advisor
               </p>
             </div>
@@ -117,11 +135,11 @@ export default function Sidebar() {
                     key={item.href}
                     href={item.href}
                     className={`
-                      flex items-center gap-3 px-3 py-2.5 rounded-lg text-[13.5px] font-medium transition-all duration-150 relative
+                      flex items-center gap-3 px-3 py-2.5 rounded-xl text-[13.5px] font-medium transition-all duration-200 relative
                       ${
                         isActive
-                          ? "bg-sidebar-active text-accent-green border-l-3 border-accent-green -ml-0.5 pl-3.5"
-                          : "text-amber-400/80 hover:text-amber-300 hover:bg-sidebar-hover"
+                          ? "bg-sidebar-active text-amber-300 ring-1 ring-amber-300/25 shadow-[inset_3px_0_0_0_var(--color-neutral)]"
+                          : "text-amber-400/75 hover:text-amber-300 hover:bg-sidebar-hover"
                       }
                     `}
                   >
@@ -143,10 +161,10 @@ export default function Sidebar() {
                 key={item.href}
                 href={item.href}
                 className={`
-                  flex items-center gap-3 px-3 py-2.5 rounded-lg text-[13.5px] font-medium transition-all duration-150 relative
+                  flex items-center gap-3 px-3 py-2.5 rounded-xl text-[13.5px] font-medium transition-all duration-200 relative
                   ${
                     isActive
-                      ? "bg-sidebar-active text-accent-green border-l-3 border-accent-green -ml-0.5 pl-3.5"
+                      ? "bg-sidebar-active text-white ring-1 ring-accent-green/30 shadow-[inset_3px_0_0_0_var(--color-accent-green)]"
                       : "text-white/60 hover:text-white/90 hover:bg-sidebar-hover"
                   }
                 `}
@@ -154,7 +172,7 @@ export default function Sidebar() {
                 {running ? (
                   <Loader2 size={18} className="animate-spin text-accent-green" />
                 ) : (
-                  <Icon size={18} strokeWidth={isActive ? 2.2 : 1.8} />
+                  <Icon size={18} strokeWidth={isActive ? 2.2 : 1.8} className={isActive ? "text-accent-green" : ""} />
                 )}
                 <span>{item.label}</span>
                 {running && (
