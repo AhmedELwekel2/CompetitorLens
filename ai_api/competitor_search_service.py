@@ -6,6 +6,7 @@ scrapes their reviews, and optionally enriches data with Trustpilot reviews.
 """
 
 import asyncio
+import gc
 import json
 import logging
 import os
@@ -16,7 +17,6 @@ from typing import Any, Dict, List, Optional
 
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
-from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.common.by import By
 from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.support.ui import WebDriverWait
@@ -26,7 +26,6 @@ from selenium.common.exceptions import (
     TimeoutException,
     StaleElementReferenceException,
 )
-from webdriver_manager.chrome import ChromeDriverManager
 
 from trustpilot_scraper import TrustpilotScraper
 
@@ -49,7 +48,9 @@ class CompetitorSearchService:
         options.add_argument("--no-sandbox")
         options.add_argument("--disable-dev-shm-usage")
         options.add_argument("--disable-software-rasterizer")
-        options.add_argument("--window-size=1920,1080")
+        options.add_argument("--window-size=1280,720")
+        options.add_argument("--single-process")
+        options.add_argument("--no-first-run")
         options.add_argument("--disable-extensions")
         options.add_argument("--disable-plugins")
         options.add_argument("--disable-background-networking")
@@ -57,6 +58,8 @@ class CompetitorSearchService:
         options.add_argument("--disable-default-apps")
         options.add_argument("--disable-blink-features=AutomationControlled")
         options.add_argument("--lang=en-US")
+        options.add_argument("--disable-component-extensions-with-background-pages")
+        options.add_argument("--disable-component-update")
         options.add_argument(
             "--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
             "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120 Safari/537.36"
@@ -65,25 +68,19 @@ class CompetitorSearchService:
         options.add_experimental_option("useAutomationExtension", False)
         prefs = {
             "profile.default_content_setting_values": {"notifications": 2, "geolocation": 2},
-            "profile.managed_default_content_settings": {"images": 1},
+            "profile.managed_default_content_settings": {"images": 2},
         }
         options.add_experimental_option("prefs", prefs)
 
-        # Try system chromedriver first (avoids version mismatch from webdriver_manager)
-        for attempt in ("system", "managed"):
-            try:
-                if attempt == "system":
-                    driver = webdriver.Chrome(options=options)
-                else:
-                    logging.info("System chromedriver not found, downloading via webdriver_manager…")
-                    service = Service(ChromeDriverManager().install())
-                    driver = webdriver.Chrome(service=service, options=options)
-                driver.set_page_load_timeout(60)
-                return driver
-            except Exception as e:
-                logging.warning(f"Chrome ({attempt}) failed: {e}, trying next…")
-
-        raise Exception("All Chrome driver attempts failed")
+        # Use system chromedriver only - AVOID webdriver_manager version mismatch
+        try:
+            driver = webdriver.Chrome(options=options)
+            driver.set_page_load_timeout(30)
+            driver.implicitly_wait(2)
+            return driver
+        except Exception as e:
+            logging.error(f"Chrome setup failed: {e}")
+            raise Exception(f"All Chrome driver attempts failed: {e}")
 
     # ------------------------------------------------------------------ #
     #  Search Google Maps for competitors                                  #
@@ -414,6 +411,8 @@ class CompetitorSearchService:
                     logging.warning(f"Error scraping reviews for {comp['name']}: {e}")
                     comp["google_maps_reviews"] = []
 
+                gc.collect()
+
             # Step 3: Trustpilot enrichment — all competitors in parallel (max 3 browsers at once)
             if progress_callback:
                 progress_callback(
@@ -422,27 +421,29 @@ class CompetitorSearchService:
                     {"total": len(competitors)},
                 )
 
-            max_workers = min(3, len(competitors))
-            with ThreadPoolExecutor(max_workers=max_workers) as executor:
-                future_to_comp = {
-                    executor.submit(
-                        self._enrich_single_competitor_trustpilot,
+            # Process Trustpilot sequentially (not in parallel) to avoid memory exhaustion
+            # VPS has limited resources; running multiple Chrome instances causes crashes
+            for i, comp in enumerate(competitors):
+                if progress_callback:
+                    progress_callback(
+                        "searching_trustpilot",
+                        f"Enriching {comp['name']} with Trustpilot data ({i+1}/{len(competitors)})",
+                        {"current": i+1, "total": len(competitors)},
+                    )
+                try:
+                    enriched = self._enrich_single_competitor_trustpilot(
                         comp,
                         max_reviews_per_competitor,
-                    ): comp
-                    for comp in competitors
-                }
-                for future in as_completed(future_to_comp):
-                    try:
-                        enriched = future.result()
-                        if progress_callback:
-                            progress_callback(
-                                "trustpilot_done",
-                                f"Trustpilot done for {enriched['name']}",
-                                {"name": enriched["name"]},
-                            )
-                    except Exception as e:
-                        logging.warning(f"Trustpilot parallel future error: {e}")
+                    )
+                    gc.collect()
+                    if progress_callback:
+                        progress_callback(
+                            "trustpilot_done",
+                            f"Trustpilot done for {enriched['name']}",
+                            {"name": enriched["name"]},
+                        )
+                except Exception as e:
+                    logging.warning(f"Trustpilot enrichment error for {comp['name']}: {e}")
 
             if progress_callback:
                 progress_callback("scraping_complete", f"Data collection complete for {len(competitors)} competitors", {"count": len(competitors)})

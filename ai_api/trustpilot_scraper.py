@@ -19,7 +19,6 @@ from typing import Any, Dict, List, Optional
 import pandas as pd
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
-from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.ui import WebDriverWait
@@ -28,7 +27,6 @@ from selenium.common.exceptions import (
     TimeoutException,
     StaleElementReferenceException,
 )
-from webdriver_manager.chrome import ChromeDriverManager
 
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
@@ -49,7 +47,10 @@ class TrustpilotScraper:
             options.add_argument("--disable-dev-shm-usage")
             options.add_argument("--disable-gpu")
             options.add_argument("--disable-software-rasterizer")
-            options.add_argument("--window-size=1920,1080")
+            options.add_argument("--window-size=1280,720")
+            options.add_argument("--single-process")
+            options.add_argument("--no-first-run")
+            options.add_argument("--no-default-browser-check")
             options.add_argument(
                 "--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
                 "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36"
@@ -68,6 +69,10 @@ class TrustpilotScraper:
                 "--disable-ipc-flooding-protection",
                 "--disable-crash-reporter",
                 "--disable-logging",
+                "--disable-component-extensions-with-background-pages",
+                "--disable-default-apps",
+                "--disable-component-update",
+                "--disable-sync",
                 "--log-level=3",
             ]:
                 options.add_argument(flag)
@@ -81,30 +86,23 @@ class TrustpilotScraper:
                     "notifications": 2,
                     "geolocation": 2,
                 },
-                "profile.managed_default_content_settings": {"images": 1},
+                "profile.managed_default_content_settings": {"images": 2},
             }
             options.add_experimental_option("prefs", prefs)
 
-            # Try system chromedriver first (avoids version mismatch from webdriver_manager)
-            for attempt in ("system", "managed"):
-                try:
-                    if attempt == "system":
-                        driver = webdriver.Chrome(options=options)
-                    else:
-                        logging.info("System chromedriver not found, downloading via webdriver_manager…")
-                        service = Service(ChromeDriverManager().install())
-                        driver = webdriver.Chrome(service=service, options=options)
-                    driver.execute_script(
-                        "Object.defineProperty(navigator,'webdriver',{get:()=>undefined})"
-                    )
-                    driver.set_page_load_timeout(60)
-                    driver.implicitly_wait(3)
-                    logging.info("TrustpilotScraper: Chrome WebDriver initialized")
-                    return driver
-                except Exception as e:
-                    logging.warning(f"Chrome ({attempt}) failed: {e}, trying next…")
-
-            raise Exception("All Chrome driver attempts failed")
+            # Use system chromedriver only - AVOID webdriver_manager version mismatch
+            try:
+                driver = webdriver.Chrome(options=options)
+                driver.execute_script(
+                    "Object.defineProperty(navigator,'webdriver',{get:()=>undefined})"
+                )
+                driver.set_page_load_timeout(30)
+                driver.implicitly_wait(2)
+                logging.info("TrustpilotScraper: Chrome WebDriver initialized")
+                return driver
+            except Exception as e:
+                logging.error(f"Chrome setup failed: {e}")
+                raise Exception(f"WebDriver setup failed: {e}")
 
         except Exception as exc:
             logging.error(f"Browser setup failed: {exc}")

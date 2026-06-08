@@ -9,7 +9,6 @@ from selenium.webdriver.common.actions.wheel_input import ScrollOrigin
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.common.exceptions import TimeoutException, NoSuchElementException
-from webdriver_manager.chrome import ChromeDriverManager
 from typing import Dict, List, Optional, Any, Union
 import os
 os.environ.setdefault("TRANSFORMERS_NO_TF", "1")
@@ -53,17 +52,18 @@ class SentimentAnalyzer:
             self.sentiment_pipeline = None
     
     def setup_browser(self):
-        from selenium.webdriver.chrome.service import Service
-        
+
         edge_options = Options()
-        
+
         # Basic stability options
         edge_options.add_argument("--headless=new")
         edge_options.add_argument("--disable-gpu")
         edge_options.add_argument("--no-sandbox")
         edge_options.add_argument("--disable-dev-shm-usage")
         edge_options.add_argument("--disable-software-rasterizer")
-        edge_options.add_argument("--window-size=1920,1080")
+        edge_options.add_argument("--window-size=1280,720")
+        edge_options.add_argument("--single-process")
+        edge_options.add_argument("--no-first-run")
         # Memory and crash prevention options
         edge_options.add_argument("--disable-extensions")
         edge_options.add_argument("--disable-plugins")
@@ -75,22 +75,21 @@ class SentimentAnalyzer:
         edge_options.add_argument("--disable-backgrounding-occluded-windows")
         edge_options.add_argument("--disable-features=TranslateUI")
         edge_options.add_argument("--disable-ipc-flooding-protection")
+        edge_options.add_argument("--disable-component-extensions-with-background-pages")
+        edge_options.add_argument("--disable-component-update")
 
         edge_options.add_argument("--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120 Safari/537.36")
-        # Memory limits to prevent crashes
-        edge_options.add_argument("--max_old_space_size=4096")
-        edge_options.add_argument("--memory-pressure-off")
-        
+
         # Crash recovery
         edge_options.add_argument("--disable-crash-reporter")
         edge_options.add_argument("--disable-logging")
         edge_options.add_argument("--log-level=3")
-        
+
         edge_options.add_argument("--disable-blink-features=AutomationControlled")
         edge_options.add_argument("--lang=en-US")
         edge_options.add_experimental_option("excludeSwitches", ["enable-automation", "enable-logging"])
         edge_options.add_experimental_option("useAutomationExtension", False)
-        
+
         # Performance preferences
         prefs = {
             "profile.default_content_setting_values": {
@@ -98,28 +97,20 @@ class SentimentAnalyzer:
                 "geolocation": 2,
             },
             "profile.managed_default_content_settings": {
-                "images": 1
+                "images": 2
             }
         }
         edge_options.add_experimental_option("prefs", prefs)
-        
-        edge_options.add_argument("--window-size=1920,1080")
-        
-        # Try system chromedriver first (avoids version mismatch from webdriver_manager)
-        for attempt in ("system", "managed"):
-            try:
-                if attempt == "system":
-                    driver = webdriver.Chrome(options=edge_options)
-                else:
-                    logging.info("System chromedriver not found, downloading via webdriver_manager…")
-                    service = Service(ChromeDriverManager().install())
-                    driver = webdriver.Chrome(service=service, options=edge_options)
-                driver.set_page_load_timeout(60)
-                return driver
-            except Exception as e:
-                logging.warning(f"Chrome ({attempt}) failed: {e}, trying next…")
 
-        raise Exception("Could not initialize Chrome WebDriver. Ensure Chrome and chromedriver are installed.")
+        # Use system chromedriver only - AVOID webdriver_manager version mismatch
+        try:
+            driver = webdriver.Chrome(options=edge_options)
+            driver.set_page_load_timeout(30)
+            driver.implicitly_wait(2)
+            return driver
+        except Exception as e:
+            logging.error(f"Chrome setup failed: {e}")
+            raise Exception(f"Could not initialize Chrome WebDriver. Ensure Chrome and chromedriver are installed: {e}")
 
     def expand_review_if_needed(self, browser, review):
         btns = review.find_elements(By.CSS_SELECTOR, 'button.w8nwRe.kyuRq[aria-expanded="false"]')
