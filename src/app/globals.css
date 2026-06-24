@@ -92,6 +92,20 @@
 }
 .animate-fade-in-up { animation: fade-in-up 0.4s cubic-bezier(0.22, 1, 0.36, 1) both; }
 
+@keyframes float {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-12px); }
+}
+.animate-float { animation: float 6s ease-in-out infinite; }
+
+/* Staggered reveal for landing sections; pair with animate-fade-in-up */
+.reveal-1 { animation-delay: 0.05s; }
+.reveal-2 { animation-delay: 0.12s; }
+.reveal-3 { animation-delay: 0.19s; }
+.reveal-4 { animation-delay: 0.26s; }
+.reveal-5 { animation-delay: 0.33s; }
+.reveal-6 { animation-delay: 0.40s; }
+
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after {
     animation-duration: 0.01ms !important;
