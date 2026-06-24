@@ -2,17 +2,15 @@
 
 import { useEffect } from "react";
 import { useRouter } from "next/navigation";
-import { useAuth } from "@/lib/auth";
 
 export default function RootPage() {
   const router = useRouter();
-  const { user, loading } = useAuth();
 
   useEffect(() => {
-    if (loading) return;
-    // Signed in → into the app; otherwise → public landing.
-    router.replace(user ? "/market-analysis" : "/welcome");
-  }, [user, loading, router]);
+    // The site root always lands on the public landing page.
+    // The landing page itself adapts for signed-in users ("Go to dashboard").
+    router.replace("/welcome");
+  }, [router]);
 
   return null;
 }
